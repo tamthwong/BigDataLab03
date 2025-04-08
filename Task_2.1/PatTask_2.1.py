@@ -153,7 +153,7 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
 
     return model, test_predictions_with_id
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) != 4:
         print("Usage: python script.py <train_input_path> <test_input_path> <output_path>")
         sys.exit(1)
@@ -171,3 +171,6 @@ if __name__ == "__main__":
         print("Interrupted by user, shutting down Spark...")
     finally:
         spark.stop()
+
+if __name__ == "__main__":
+    main()
