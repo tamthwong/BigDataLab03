@@ -48,7 +48,6 @@ def preprocess_train_data(spark, data):
                            when(col("store_and_fwd_flag").isin("Y", "yes"), 1).otherwise(0))
 
     # Tính khoảng cách Haversine
-    # Đổi các cột thành radian trước
     data = data.withColumn("lat1_rad", radians(col("pickup_latitude"))) \
             .withColumn("lon1_rad", radians(col("pickup_longitude"))) \
             .withColumn("lat2_rad", radians(col("dropoff_latitude"))) \
@@ -107,7 +106,7 @@ def preprocess_test_data(spark, data, feature_cols):
             .withColumn("lat2_rad", radians(col("dropoff_latitude"))) \
             .withColumn("lon2_rad", radians(col("dropoff_longitude")))
 
-    # Calculate parts of Haversine formula
+    # Tính toán các phần trong công thức Haversine
     data = data.withColumn("dlat", col("lat2_rad") - col("lat1_rad")) \
             .withColumn("dlon", col("lon2_rad") - col("lon1_rad")) \
             .withColumn("a", sin(col("dlat")/2)**2 +
@@ -120,36 +119,23 @@ def preprocess_test_data(spark, data, feature_cols):
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
     assembled_data = assembler.transform(data)
 
+    # Apply na.drop()
+    assembled_data = assembled_data.na.drop()
+
     # Join back with id_data to keep only the rows that survived na.drop()
     assembled_data = assembled_data.join(id_data, "id", "inner")
 
     print("Test preprocessing complete.")
     return assembled_data
 
-def process_and_train_decision_tree(spark, train_input_path, test_input_path, output_path):
-    # Start measuring total processing time
-    start_time = time.time()
-
-    # Load and preprocess training dataset
-    train_data = spark.read.csv(train_input_path, header=True, inferSchema=True)
-    train_assembled, feature_cols, train_ids = preprocess_train_data(spark, train_data)
-
-    # Select only features and label for training (exclude 'id')
-    train_final = train_assembled.select("features", "label")
-
-    # Train-test split for evaluation
-    train_split, test_split = train_final.randomSplit([0.8, 0.2], seed=42)
-
-    # GridSearch
-    max_depths = [i for i in range(1, 15)]
-    impurity = "variance"  # Fixed for regression
+def grid_search(train_split, test_split, max_depths, impurity="variance"):
+    """Perform grid search over maxDepth values to find the best model."""
     best_rmse = float("inf")
-    best_r2 = float("inf")
+    best_r2 = float("-inf")
     best_model = None
     best_max_depth = None
     best_training_time = None
 
-    # Iterate over maxDepth values
     print("Starting hyperparameter tuning...")
     for max_depth in max_depths:
         print(f"--- Training with depth {max_depth} ---")
@@ -162,7 +148,6 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
 
         # Evaluate on the validation split
         train_predictions = model.transform(test_split)
-        # Chuyển ngược log transform để tính RMSE và R² trên thang gốc
         train_predictions = train_predictions.withColumn("prediction_original", exp(col("prediction")) - 1)
         train_predictions = train_predictions.withColumn("label_original", exp(col("label")) - 1)
 
@@ -184,6 +169,27 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
     print(f"Best RMSE: {best_rmse}")
     print(f"Best R²: {best_r2}")
     print(f"Training time for best model: {best_training_time:.2f} seconds")
+    return best_model, best_rmse, best_r2, best_max_depth, best_training_time
+
+def process_and_train_decision_tree(spark, train_input_path, test_input_path, output_path):
+    # Start measuring total processing time
+    start_time = time.time()
+
+    # Load and preprocess training dataset
+    train_data = spark.read.csv(train_input_path, header=True, inferSchema=True)
+    train_assembled, feature_cols, train_ids = preprocess_train_data(spark, train_data)
+
+    # Select only features and label for training (exclude 'id')
+    train_final = train_assembled.select("features", "label")
+
+    # Train-test split for evaluation
+    train_split, test_split = train_final.randomSplit([0.8, 0.2], seed=42)
+
+    # GridSearch
+    max_depths = [i for i in range(1, 15)]
+    best_model, best_rmse, best_r2, best_max_depth, best_training_time = grid_search(
+        train_split, test_split, max_depths, impurity="variance"
+    )
 
     # Load and preprocess the test dataset
     test_data = spark.read.csv(test_input_path, header=True, inferSchema=True)
@@ -195,7 +201,6 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
     # Make predictions on test.csv using the best model
     print("Making predictions on test data with best model...")
     test_predictions = best_model.transform(test_final)
-    # Chuyển ngược log transform cho kết quả dự đoán
     test_predictions = test_predictions.withColumn("prediction", exp(col("prediction")) - 1)
 
     # Select only 'id' and 'prediction', sort by 'id'
@@ -225,7 +230,7 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
         ("Valid RMSE", str(best_rmse)),
         ("Valid R2", str(best_r2)),
         ("Best Max Depth", str(best_max_depth)),
-        ("Impurity", impurity),
+        ("Impurity", "variance"),
         ("Training Time (Seconds)", str(best_training_time)),
         ("Total Processing Time (Seconds)", str(total_processing_time)),
     ]
