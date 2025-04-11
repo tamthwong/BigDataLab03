@@ -107,7 +107,7 @@ def preprocess_test_data(spark, data, feature_cols):
             .withColumn("lat2_rad", radians(col("dropoff_latitude"))) \
             .withColumn("lon2_rad", radians(col("dropoff_longitude")))
 
-    # Tính toán các phần trong công thức Haversine
+    # Calculate parts of Haversine formula
     data = data.withColumn("dlat", col("lat2_rad") - col("lat1_rad")) \
             .withColumn("dlon", col("lon2_rad") - col("lon1_rad")) \
             .withColumn("a", sin(col("dlat")/2)**2 +
@@ -119,9 +119,6 @@ def preprocess_test_data(spark, data, feature_cols):
     # Use VectorAssembler with the common feature columns from train.csv
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
     assembled_data = assembler.transform(data)
-
-    # Apply na.drop()
-    assembled_data = assembled_data.na.drop()
 
     # Join back with id_data to keep only the rows that survived na.drop()
     assembled_data = assembled_data.join(id_data, "id", "inner")
