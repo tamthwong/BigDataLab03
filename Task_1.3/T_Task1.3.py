@@ -8,13 +8,17 @@ import time
 def z_score_normalize(rdd, mean_values, std_values):
     return rdd.map(lambda row: (tuple([(x - mean) / std if std != 0 else 0 for x, mean, std in zip(row[0], mean_values, std_values)] + [1.0]), row[1]))
 
-def compute_mean_std(train_rdd):
-    count = train_rdd.count()
-    sum_vector = train_rdd.map(lambda x: x[0]).reduce(lambda a, b: [x + y for x, y in zip(a, b)])
+def compute_mean_std(rdd):
+    count = rdd.count()
+    # Tính mean và sum of squares trong một lần reduce
+    def combine_stats(a, b):
+        return [x + y for x, y in zip(a[0], b[0])], [x + y for x, y in zip(a[1], b[1])]
+    
+    sum_vector, sum_squares = rdd.map(lambda x: ([xi for xi in x[0]], [xi * xi for xi in x[0]])) \
+                                 .reduce(combine_stats)
+    
     mean_vector = [x / count for x in sum_vector]
-    sum_squared_diff = train_rdd.map(lambda x: [(xi - mi) ** 2 for xi, mi in zip(x[0], mean_vector)]) \
-                               .reduce(lambda a, b: [x + y for x, y in zip(a, b)])
-    std_vector = [math.sqrt(x / count + 1e-10) for x in sum_squared_diff]
+    std_vector = [math.sqrt((s / count) - (m * m) + 1e-10) for s, m in zip(sum_squares, mean_vector)]
     return mean_vector, std_vector
 
 def parse_line(line):
@@ -36,9 +40,9 @@ def preprocessing(rdd_data):
     rdd_data = rdd_data.filter(lambda x: all(not math.isnan(f) for f in x[0]) and not math.isnan(x[1]))
     train_rdd, val_rdd, test_rdd = rdd_data.randomSplit([0.7, 0.1, 0.2], seed=42)
     mean_values, std_values = compute_mean_std(train_rdd)
-    normalized_train_rdd = z_score_normalize(train_rdd, mean_values, std_values)
-    normalized_val_rdd = z_score_normalize(val_rdd, mean_values, std_values)
-    normalized_test_rdd = z_score_normalize(test_rdd, mean_values, std_values)
+    normalized_train_rdd = z_score_normalize(train_rdd, mean_values, std_values).cache()
+    normalized_val_rdd = z_score_normalize(val_rdd, mean_values, std_values).cache()
+    normalized_test_rdd = z_score_normalize(test_rdd, mean_values, std_values).cache()
     return normalized_train_rdd, normalized_val_rdd, normalized_test_rdd
 
 def dot_product(weights, features):
@@ -49,8 +53,7 @@ def sigmoid(z):
         return 1.0
     elif z < -100:
         return 0.0
-    else:
-        return 1 / (1 + math.exp(-z))
+    return 1 / (1 + math.exp(-z))
 
 def compute_gradient(point, weights, reg_param):
     features, label = point
@@ -62,37 +65,56 @@ def compute_loss(rdd, weights, reg_param, class_weights):
     temp_rdd = rdd.map(lambda p: class_weights[p[1]] * (
         -p[1] * math.log(sigmoid(dot_product(weights, p[0])) + 1e-10) 
         - (1 - p[1]) * math.log(1 - sigmoid(dot_product(weights, p[0])) + 1e-10)))
-    log_loss = temp_rdd.reduce(lambda a, b: a + b) / temp_rdd.count()
+    log_loss = temp_rdd.reduce(lambda a, b: a + b) / rdd.count()
     l2_penalty = reg_param * sum(w * w for w in weights[:-1])
     return log_loss + l2_penalty
 
-def train_sgd(train_rdd, num_features, sc, learning_rate, num_epochs, batch_size, 
-              reg_param, momentum, class_weights, early_stop_patience, early_stop_factor):
+def train_gd(train_rdd, num_features, sc, learning_rate, num_epochs, reg_param, momentum, 
+             class_weights, early_stop_patience, early_stop_factor):
     weights = [0.0] * (num_features + 1)
     velocity = [0.0] * (num_features + 1)
     min_loss = float('inf')
-    start_time = time.time()
+    start_time = time.perf_counter()
+    count = train_rdd.count()
     
     for epoch in range(num_epochs):
-        batch_rdd = train_rdd.takeSample(withReplacement=False, num=batch_size, seed=epoch)
-        gradients = [0.0] * (num_features + 1)
-        for point in batch_rdd:
-            grad = compute_gradient(point, weights, reg_param)
-            gradients = [g + dg for g, dg in zip(gradients, grad)]
+        # Tính gradient trên toàn bộ dữ liệu song song
+        gradients = train_rdd.map(lambda point: compute_gradient(point, weights, reg_param)) \
+                            .reduce(lambda a, b: [x + y for x, y in zip(a, b)])
+        gradients = [g / count for g in gradients]  # Trung bình gradient
         
-        velocity = [momentum * v + (1 - momentum) * (g / batch_size) for v, g in zip(velocity, gradients)]
+        # Cập nhật velocity với momentum
+        velocity = [momentum * v + (1 - momentum) * g for v, g in zip(velocity, gradients)]
+        # Cập nhật weights
         weights = [w - learning_rate * v for w, v in zip(weights, velocity)]
         
-        loss = compute_loss(train_rdd, weights, reg_param, class_weights)
-        print(f"Epoch {epoch}, Loss: {loss}")
-        
-        if epoch > early_stop_patience and loss > min_loss * early_stop_factor:
-            print("Early stopping triggered")
-            break
-        min_loss = min(min_loss, loss)
+        # Tính loss mỗi 5 epoch để giảm chi phí
+        if epoch % 5 == 0 or epoch == num_epochs - 1:
+            loss = compute_loss(train_rdd, weights, reg_param, class_weights)
+            print(f"Epoch {epoch}, Loss: {loss}")
+            
+            # Early stopping
+            if epoch > early_stop_patience and loss > min_loss * early_stop_factor:
+                print("Early stopping triggered")
+                break
+            min_loss = min(min_loss, loss)
     
-    training_time = time.time() - start_time
+    training_time = time.perf_counter() - start_time
     return weights, training_time
+
+def evaluate_single_threshold(rdd, weights, threshold):
+    predictions = rdd.map(lambda p: (p[1], 1 if sigmoid(dot_product(weights, p[0])) > threshold else 0))
+    tp = predictions.filter(lambda x: x[0] == 1 and x[1] == 1).count()
+    fp = predictions.filter(lambda x: x[0] == 0 and x[1] == 1).count()
+    tn = predictions.filter(lambda x: x[0] == 0 and x[1] == 0).count()
+    fn = predictions.filter(lambda x: x[0] == 1 and x[1] == 0).count()
+    
+    accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-10)
+    precision = tp / (tp + fp + 1e-10)
+    recall = tp / (tp + fn + 1e-10)
+    f1_score = 2 * (precision * recall) / (precision + recall + 1e-10)
+    
+    return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1_score": f1_score}
 
 def evaluate_model(rdd, weights, thresholds):
     predictions = rdd.map(lambda p: (p[1], sigmoid(dot_product(weights, p[0]))))
@@ -119,20 +141,6 @@ def evaluate_model(rdd, weights, thresholds):
     
     return results
 
-def evaluate_single_threshold(rdd, weights, threshold):
-    predictions = rdd.map(lambda p: (p[1], 1 if sigmoid(dot_product(weights, p[0])) > threshold else 0))
-    tp = predictions.filter(lambda x: x[0] == 1 and x[1] == 1).count()
-    fp = predictions.filter(lambda x: x[0] == 0 and x[1] == 1).count()
-    tn = predictions.filter(lambda x: x[0] == 0 and x[1] == 0).count()
-    fn = predictions.filter(lambda x: x[0] == 1 and x[1] == 0).count()
-    
-    accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-10)
-    precision = tp / (tp + fp + 1e-10)
-    recall = tp / (tp + fn + 1e-10)
-    f1_score = 2 * (precision * recall) / (precision + recall + 1e-10)
-    
-    return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1_score": f1_score}
-
 def grid_search(train_rdd, val_rdd, num_features, sc, param_grid, thresholds, metric='f1_score'):
     all_results = []
     best_score = 0.0
@@ -144,7 +152,6 @@ def grid_search(train_rdd, val_rdd, num_features, sc, param_grid, thresholds, me
     param_combinations = list(product(
         param_grid['learning_rates'],
         param_grid['num_epochs'],
-        param_grid['batch_sizes'],
         param_grid['reg_params'],
         param_grid['momentums'],
         param_grid['class_weights_list'],
@@ -153,21 +160,19 @@ def grid_search(train_rdd, val_rdd, num_features, sc, param_grid, thresholds, me
     ))
     
     for params in param_combinations:
-        (learning_rate, num_epochs, batch_size, reg_param, momentum, 
+        (learning_rate, num_epochs, reg_param, momentum, 
          class_weights, early_stop_patience, early_stop_factor) = params
         
         print(f"\nTrying combination: learning_rate={learning_rate}, num_epochs={num_epochs}, "
-              f"batch_size={batch_size}, reg_param={reg_param}, momentum={momentum}, "
-              f"class_weights={class_weights}, early_stop_patience={early_stop_patience}, "
-              f"early_stop_factor={early_stop_factor}")
+              f"reg_param={reg_param}, momentum={momentum}, class_weights={class_weights}, "
+              f"early_stop_patience={early_stop_patience}, early_stop_factor={early_stop_factor}")
         
-        weights, training_time = train_sgd(
-            train_rdd, num_features, sc, learning_rate, num_epochs, batch_size,
+        weights, training_time = train_gd(
+            train_rdd, num_features, sc, learning_rate, num_epochs,
             reg_param, momentum, class_weights, early_stop_patience, early_stop_factor
         )
         val_metrics = evaluate_model(val_rdd, weights, thresholds)
         
-        # Find best threshold for this model based on the specified metric
         best_threshold_for_model = max(val_metrics.keys(), key=lambda t: val_metrics[t][metric])
         score = val_metrics[best_threshold_for_model][metric]
         
@@ -191,7 +196,7 @@ def grid_search(train_rdd, val_rdd, num_features, sc, param_grid, thresholds, me
 
 def main(input_path, output_path):
     spark = SparkSession.builder \
-        .appName("SGD_Logistic_Regression_RDD_with_Momentum") \
+        .appName("Gradient_Descent_RDD_Optimized") \
         .config("spark.driver.memory", "8g") \
         .config("spark.executor.memory", "8g") \
         .config("spark.executor.cores", "4") \
@@ -205,12 +210,11 @@ def main(input_path, output_path):
     param_grid = {
         'learning_rates': [0.1, 0.3, 0.5, 0.7, 1],
         'num_epochs': [30],
-        'batch_sizes': [600],
         'reg_params': [0.003, 0.001, 0.0007],
         'momentums': [0.9],
         'class_weights_list': [{0: 1.0, 1: 581.0}],
         'early_stop_patiences': [10],
-        'early_stop_factors': [1.001]
+        'early_stop_factors': [1.01]
     }
     thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
@@ -220,14 +224,12 @@ def main(input_path, output_path):
     
     test_metrics = evaluate_single_threshold(normalized_test_rdd, best_weights, best_threshold)
 
-    # Format all results
     formatted_results = []
     for i, result in enumerate(all_results):
         params_str = (f"learning_rate={result['params'][0]}, num_epochs={result['params'][1]}, "
-                     f"batch_size={result['params'][2]}, reg_param={result['params'][3]}, "
-                     f"momentum={result['params'][4]}, class_weights={result['params'][5]}, "
-                     f"early_stop_patience={result['params'][6]}, early_stop_factor={result['params'][7]}, "
-                     f"Best_Threshold={result['best_threshold']}")
+                     f"reg_param={result['params'][2]}, momentum={result['params'][3]}, "
+                     f"class_weights={result['params'][4]}, early_stop_patience={result['params'][5]}, "
+                     f"early_stop_factor={result['params'][6]}, Best_Threshold={result['best_threshold']}")
         metrics_str = (f"Training_Time: {result['training_time']:.2f}s, "
                       f"Val_Acc: {result['val_metrics']['accuracy']:.4f}, "
                       f"Val_Prec: {result['val_metrics']['precision']:.4f}, "
@@ -235,7 +237,6 @@ def main(input_path, output_path):
                       f"Val_F1: {result['val_metrics']['f1_score']:.4f}")
         formatted_results.append(f"Run {i+1}: Params: {params_str}, Metrics: {metrics_str}")
 
-    # Add best model results
     best_results = [
         f"\nBest Model Results:",
         f"Best Weights (including bias): {best_weights}",
@@ -247,9 +248,9 @@ def main(input_path, output_path):
         f"Test_Rec: {test_metrics['recall']:.4f}, "
         f"Test_F1: {test_metrics['f1_score']:.4f}",
         f"Best Parameters: learning_rate={best_params[0]}, num_epochs={best_params[1]}, "
-        f"batch_size={best_params[2]}, reg_param={best_params[3]}, momentum={best_params[4]}, "
-        f"class_weights={best_params[5]}, early_stop_patience={best_params[6]}, "
-        f"early_stop_factor={best_params[7]}, threshold={best_threshold}"
+        f"reg_param={best_params[2]}, momentum={best_params[3]}, "
+        f"class_weights={best_params[4]}, early_stop_patience={best_params[5]}, "
+        f"early_stop_factor={best_params[6]}, threshold={best_threshold}"
     ]
 
     final_output = formatted_results + best_results
