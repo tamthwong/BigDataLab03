@@ -4,38 +4,27 @@ from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.sql.functions import col, when
 import sys
+import time
 
 def compute_metrics(predictions):
-    # Tính TP, FP, FN cho lớp 0 và lớp 1 sử dụng DataFrame
-    tp_0 = predictions.filter((col("prediction") == 0.0) & (col("Class") == 0.0)).count()
-    fp_0 = predictions.filter((col("prediction") == 0.0) & (col("Class") == 1.0)).count()
-    fn_0 = predictions.filter((col("prediction") == 1.0) & (col("Class") == 0.0)).count()
-    
+    # Tính TP, FP, FN chỉ cho lớp 1 sử dụng DataFrame
     tp_1 = predictions.filter((col("prediction") == 1.0) & (col("Class") == 1.0)).count()
     fp_1 = predictions.filter((col("prediction") == 1.0) & (col("Class") == 0.0)).count()
     fn_1 = predictions.filter((col("prediction") == 0.0) & (col("Class") == 1.0)).count()
     
-    # Tính precision và recall cho lớp 0
-    precision_0 = tp_0 / (tp_0 + fp_0) if (tp_0 + fp_0) != 0 else 0.0
-    recall_0 = tp_0 / (tp_0 + fn_0) if (tp_0 + fn_0) != 0 else 0.0
+    # Tính precision và recall chỉ cho lớp 1
+    precision = tp_1 / (tp_1 + fp_1) if (tp_1 + fp_1) != 0 else 0.0
+    recall = tp_1 / (tp_1 + fn_1) if (tp_1 + fn_1) != 0 else 0.0
     
-    # Tính precision và recall cho lớp 1
-    precision_1 = tp_1 / (tp_1 + fp_1) if (tp_1 + fp_1) != 0 else 0.0
-    recall_1 = tp_1 / (tp_1 + fn_1) if (tp_1 + fn_1) != 0 else 0.0
+    # Tính F1-score cho lớp 1
+    f1_score = (2.0 * precision * recall) / (precision + recall) if (precision + recall) != 0 else 0.0
     
-    # Tính unweighted (macro-average) precision và recall
-    unweighted_precision = (precision_0 + precision_1) / 2.0
-    unweighted_recall = (recall_0 + recall_1) / 2.0
-    
-    # Tính unweighted F1-score
-    unweighted_f1 = (2.0 * unweighted_precision * unweighted_recall) / (unweighted_precision + unweighted_recall) if (unweighted_precision + unweighted_recall) != 0 else 0.0
-    
-    # Tính accuracy
+    # Tính accuracy (cho toàn bộ)
     correct = predictions.filter(col("prediction") == col("Class")).count()
     total = predictions.count()
     accuracy = correct / total if total != 0 else 0.0
     
-    return accuracy, unweighted_precision, unweighted_recall, unweighted_f1
+    return accuracy, precision, recall, f1_score
 
 def RunLogRegression(input_file, output_file):
     spark = SparkSession.builder.appName("LogisticRegression_StructuredAPI").getOrCreate()
@@ -64,30 +53,36 @@ def RunLogRegression(input_file, output_file):
 
     # Train the Logistic Regression model
     lr = LogisticRegression(featuresCol="features", labelCol="Class", maxIter=10)
+    
+    # Đo thời gian huấn luyện
+    start_time = time.time()
     model = lr.fit(train)
-
+    end_time = time.time()
+    training_time = end_time - start_time
+    
     summary = model.summary
     
     # Dự đoán trên tập test
     predictions = model.transform(test)
 
-    # Tính AUC bằng BinaryClassificationEvaluator
+    # Tính AUC-ROC bằng BinaryClassificationEvaluator
     auc_evaluator = BinaryClassificationEvaluator(labelCol="Class", metricName="areaUnderROC")
     auc = auc_evaluator.evaluate(predictions)
     
-    # Tính các chỉ số unweighted
+    # Tính các chỉ số cho lớp 1
     accuracy, precision, recall, f1_score = compute_metrics(predictions)
     
     results = [
         ["Coefficients:", model.coefficients.toArray().tolist()],
         ["Intercept:", model.intercept],
+        ["Training Time (seconds):", training_time],
         ["Accuracy (Training):", summary.accuracy],
         ["Accuracy (Test):", accuracy],
         ["Area Under ROC (Training):", summary.areaUnderROC],
         ["Area Under ROC (Test):", auc],
-        ["Precision (Test, Unweighted):", precision],
-        ["Recall (Test, Unweighted):", recall],
-        ["F1-Score (Test, Unweighted):", f1_score]
+        ["Precision (Test, Class 1):", precision],
+        ["Recall (Test, Class 1):", recall],
+        ["F1-Score (Test, Class 1):", f1_score]
     ]
     
     spark.sparkContext.parallelize(results).coalesce(1).saveAsTextFile(output_file)
