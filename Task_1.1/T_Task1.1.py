@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-import sys
+import sys, time
 
 def RunLogRegression(input_file, output_file):
     spark = SparkSession.builder.appName("LogisticRegression_StructuredAPI").getOrCreate()
@@ -17,7 +17,7 @@ def RunLogRegression(input_file, output_file):
     assembled_data = assembler.transform(data).select("raw_features", "Class")
 
     # Split the data into training and test sets
-    raw_train, raw_valid, raw_test = assembled_data.randomSplit([0.7, 0.1, 0.2], seed=42)
+    raw_train, raw_test = assembled_data.randomSplit([0.8, 0.2], seed=42)
     
     # Scale the features
     scaler = StandardScaler(inputCol="raw_features", outputCol="features", withStd=True, withMean=True)
@@ -30,8 +30,11 @@ def RunLogRegression(input_file, output_file):
     test = scaler_model.transform(raw_test).select("features", "Class")
 
     # Train the Logistic Regression model
-    lr = LogisticRegression(featuresCol="features", labelCol="Class", maxIter=10)
+    lr = LogisticRegression(featuresCol="features", labelCol="Class", maxIter=100)
+    start_time = time.time()
     model = lr.fit(train)
+    end_time = time.time()
+    print(f"Training time: {(end_time - start_time):.2f} seconds")
 
     summary = model.summary
     
@@ -50,6 +53,7 @@ def RunLogRegression(input_file, output_file):
     recall = recall_evaluator.evaluate(predictions)
     
     results = [
+        ["Training time:", (end_time - start_time)],
         ["Coefficients:", model.coefficients.toArray().tolist()],
         ["Intercept:", model.intercept],
         ["Accuracy (Training):", summary.accuracy],

@@ -81,6 +81,7 @@ def RDDLogRegression(spark, input_file, output_file):
     best_f1_score = 0.0
     best_step = 0.0
     best_iterations = 0
+    best_train_time = 0.0
 
     for step in model_candidate['step']:
         for iterations in model_candidate['iterations']:
@@ -105,13 +106,14 @@ def RDDLogRegression(spark, input_file, output_file):
                 best_model = model 
                 best_step = step
                 best_iterations = iterations
+                best_train_time = end_time - start_time
                 
             results.append(f"iterations={iterations}, stepSize={step}, TrainCE={train_ce:.4f}, TrainAcc={train_accuracy:.4f}, TrainPrec={train_precision:.4f}, TrainRec={train_recall:.4f}, TrainF1={train_f1_score:.4f}, ValCE={valid_ce:.4f}, ValAcc={valid_accuracy:.4f}, ValPrec={valid_precision:.4f}, ValRec={valid_recall:.4f}, ValF1={valid_f1_score:.4f}, Time={(end_time - start_time):.2f}s")
 
     test_ce, test_accuracy, test_precision, test_recall, test_f1_score = evaluate_model(model, rdd_test)
 
-    print(f"Best parameters: Iterations: {best_iterations}, Step size: {best_step}, CE: {test_ce:.4f}, Accuracy: {test_accuracy:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1-Score: {test_f1_score:.4f}")
-    results.append(f"Best parameters: Iterations: {best_iterations}, Step size: {best_step}, CE: {test_ce:.4f}, Accuracy: {test_accuracy:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1-Score: {test_f1_score:.4f}")
+    print(f"Best training time: {best_train_time}\nBest parameters: Iterations: {best_iterations}, Step size: {best_step}, CE: {test_ce:.4f}, Accuracy: {test_accuracy:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1-Score: {test_f1_score:.4f}")
+    results.append(f"Best training time: {best_train_time}\nBest parameters: Iterations: {best_iterations}, Step size: {best_step}, CE: {test_ce:.4f}, Accuracy: {test_accuracy:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1-Score: {test_f1_score:.4f}")
     results.append(f"Coefficients: {best_model.weights.toArray().tolist()}")
 
     spark.sparkContext.parallelize(results).coalesce(1).saveAsTextFile(output_file)
