@@ -45,7 +45,7 @@ def parse_train_line(line):
         lat2, lon2 = radians(dropoff_latitude), radians(dropoff_longitude)
         dlat, dlon = lat2 - lat1, lon2 - lon1
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-        distance_haversine = 2 * asin(sqrt(a)) * 6371  # Earth radius in km
+        distance_haversine = 2 * asin(sqrt(a)) * 6371
 
         # Filter speed outliers (> 100 km/h)
         speed = distance_haversine / (trip_duration / 3600)
@@ -305,17 +305,6 @@ def main():
 
         test_rdd = load_and_preprocess_test_data(sc, test_input_path)
         predictions_rdd = test_rdd.map(lambda x: (x[0], exp(best_model.predict(x[1])) - 1))
-
-        sample_data = test_rdd.take(5)
-        sample_predictions = [(x[0], dict(zip(feature_cols, x[1])), exp(best_model.predict(x[1])) - 1) for x in sample_data]
-        for id_val, features, pred in sample_predictions:
-            print(f"ID: {id_val}, Features: {features}, Predicted: {pred:.2f}")
-
-        sample_df = spark.createDataFrame(
-            [(id_val, str(features), pred) for id_val, features, pred in sample_predictions],
-            ["ID", "Features", "Predicted"]
-        )
-        sample_df.coalesce(1).write.mode("overwrite").csv(f"{output_path}/sample_predictions", header=True)
 
         predictions_df = spark.createDataFrame(predictions_rdd, ["id", "prediction"]).orderBy("id")
         predictions_df.coalesce(1).write.mode("overwrite").csv(f"{output_path}/predictions", header=True)
