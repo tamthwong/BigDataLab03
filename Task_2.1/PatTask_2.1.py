@@ -1,10 +1,12 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, to_timestamp, unix_timestamp, abs, dayofmonth, month, dayofweek, hour, when, row_number, monotonically_increasing_id
-from pyspark.sql.window import Window
+from pyspark.sql.functions import col, to_timestamp, unix_timestamp, abs, dayofmonth, month, dayofweek, hour, when
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.regression import DecisionTreeRegressor
 from pyspark.ml.evaluation import RegressionEvaluator
 import sys
+import time
+import psutil
+import os
 
 def preprocess_train_data(data):
     print("Preprocessing train data...")
@@ -47,13 +49,12 @@ def preprocess_train_data(data):
 
 def preprocess_test_data(data, feature_cols):
     print("Preprocessing test data...")
-    # Store 'id' with an index to preserve order
-    window = Window.orderBy("id")  # Assuming 'id' order matches test.csv; adjust if needed
-    id_data = data.select("id").withColumn("row_index", row_number().over(window))
+    # Store 'id' to reintroduce later
+    id_data = data.select("id")
 
     # Extract features from 'pickup_datetime'
-    data = data.withColumn("pickup_datetime", to_timestamp(col("pickup_datetime")))
-    data = data.withColumn("day_of_month", dayofmonth(col("pickup_datetime"))) \
+    data = data.withColumn("pickup_datetime", to_timestamp(col("pickup_datetime"))) \
+               .withColumn("day_of_month", dayofmonth(col("pickup_datetime"))) \
                .withColumn("month", month(col("pickup_datetime"))) \
                .withColumn("day_of_week", dayofweek(col("pickup_datetime"))) \
                .withColumn("hour", hour(col("pickup_datetime")))
@@ -64,12 +65,27 @@ def preprocess_test_data(data, feature_cols):
 
     # Use VectorAssembler with the common feature columns from train.csv
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-    assembled_data = assembler.transform(data).na.drop().withColumn("row_index", row_number().over(window))
+    assembled_data = assembler.transform(data)
+
+    # Apply na.drop()
+    assembled_data = assembled_data.na.drop()
+
+    # Join back with id_data to keep only the rows that survived na.drop()
+    assembled_data = assembled_data.join(id_data, "id", "inner")
 
     print("Test preprocessing complete.")
-    return assembled_data, id_data
+    return assembled_data
+
+def get_memory_usage():
+    """Get the memory usage of the current process in MB."""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / (1024 * 1024)  # Convert bytes to MB
 
 def process_and_train_decision_tree(spark, train_input_path, test_input_path, output_path):
+    # Start measuring total processing time
+    start_time = time.time()
+
     # Load and preprocess training dataset
     train_data = spark.read.csv(train_input_path, header=True, inferSchema=True)
     train_assembled, feature_cols, train_ids = preprocess_train_data(train_data)
@@ -80,70 +96,63 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
     # Train-test split for evaluation
     train_split, test_split = train_final.randomSplit([0.8, 0.2], seed=42)
 
-    # Train the Decision Tree Regressor with maxDepth=5
-    print("Training model...")
-    dt = DecisionTreeRegressor(featuresCol="features", labelCol="label", maxDepth=10, impurity="variance")
-    model = dt.fit(train_split)
+    # GridSearch
+    max_depths = [i for i in range(1, 11)]
+    impurity = "variance"  # Fixed for regression
+    best_rmse = float("inf")
+    best_r2 = float("inf")
+    best_model = None
+    best_max_depth = None
+    best_training_time = None
 
-    # Evaluate on the test split from train.csv (validation split)
-    train_predictions = model.transform(test_split)
-    evaluator = RegressionEvaluator(labelCol="label", predictionCol="prediction")
-    valid_rmse = evaluator.evaluate(train_predictions, {evaluator.metricName: "rmse"})
-    valid_r2 = evaluator.evaluate(train_predictions, {evaluator.metricName: "r2"})
-    print("RMSE (validation split):", valid_rmse)
-    print("R² (validation split):", valid_r2)
+    # Iterate over maxDepth values
+    print("Starting hyperparameter tuning...")
+    for max_depth in max_depths:
+        print(f"--- Training with depth {max_depth} ---")
+        train_start_time = time.time()
+        dt = DecisionTreeRegressor(featuresCol="features", labelCol="label", maxDepth=max_depth, impurity=impurity)
+        model = dt.fit(train_split)
+        train_end_time = time.time()
+        training_time = train_end_time - train_start_time
+        print(f"Training time for maxDepth={max_depth}: {training_time:.2f} seconds")
 
-    # Reintroduce 'id' for validation output (optional display)
-    train_ids_with_index = train_ids.withColumn("index", monotonically_increasing_id())
-    train_predictions_with_index = train_predictions.withColumn("index", monotonically_increasing_id())
-    train_predictions_with_id = train_predictions_with_index.join(train_ids_with_index, "index", "inner").drop("index")
-    train_predictions_with_id.select("id", "label", "prediction").show(5)
+        # Evaluate on the validation split
+        train_predictions = model.transform(test_split)
+        evaluator = RegressionEvaluator(labelCol="label", predictionCol="prediction")
+        valid_rmse = evaluator.evaluate(train_predictions, {evaluator.metricName: "rmse"})
+        valid_r2 = evaluator.evaluate(train_predictions, {evaluator.metricName: "r2"})
+        print(f"RMSE (validation split) for maxDepth={max_depth}: {valid_rmse}")
+        print(f"R² (validation split) for maxDepth={max_depth}: {valid_r2}")
 
-    # 1. Write validation metrics to HDFS
-    validation_metrics = spark.createDataFrame(
-        [(valid_rmse, valid_r2)],
-        ["Valid_RMSE", "Valid_R2"]
-    )
-    validation_metrics.coalesce(1) \
-                      .write \
-                      .mode("overwrite") \
-                      .csv(f"{output_path}/validation_metrics", header=True)
-    print(f"Validation metrics saved to: {output_path}/validation_metrics")
+        # Update best model if this RMSE is lower
+        if valid_rmse < best_rmse:
+            best_rmse = valid_rmse
+            best_r2 = valid_r2
+            best_model = model
+            best_max_depth = max_depth
+            best_training_time = training_time
 
-    # 2. Write tree structure and feature importances to HDFS
-    tree_structure = model.toDebugString
-    feature_importances = model.featureImportances.toArray().tolist()
-    feature_importance_dict = dict(zip(feature_cols, feature_importances))
-    model_details = [
-        ("Tree Structure", tree_structure),
-        ("Feature Importances", str(feature_importance_dict))
-    ]
-    model_details_df = spark.createDataFrame(model_details, ["Metric", "Value"])
-    model_details_df.coalesce(1) \
-                    .write \
-                    .mode("overwrite") \
-                    .csv(f"{output_path}/model_details", header=True)
-    print("Tree Structure:\n", tree_structure)
-    print("Feature Importances:", feature_importances)
-    print(f"Model details saved to: {output_path}/model_details")
+    print(f"\nBest model: maxDepth={best_max_depth}, impurity={impurity}")
+    print(f"Best RMSE: {best_rmse}")
+    print(f"Best R²: {best_r2}")
+    print(f"Training time for best model: {best_training_time:.2f} seconds")
 
     # Load and preprocess the test dataset
     test_data = spark.read.csv(test_input_path, header=True, inferSchema=True)
-    test_assembled, test_ids = preprocess_test_data(test_data, feature_cols)
+    test_assembled = preprocess_test_data(test_data, feature_cols)
 
-    # Select only features for prediction (exclude 'id')
-    test_final = test_assembled.select("features", "row_index")
+    # Select features and id for prediction
+    test_final = test_assembled.select("id", "features")
 
-    # Make predictions on test.csv
-    print("Making predictions on test data...")
-    test_predictions = model.transform(test_final)
+    # Make predictions on test.csv using the best model
+    print("Making predictions on test data with best model...")
+    test_predictions = best_model.transform(test_final)
 
-    # Join predictions with 'id' using the preserved row_index, exclude 'features'
-    test_predictions_with_id = test_predictions.join(test_ids, "row_index", "inner") \
-                                               .select("id", "prediction")
+    # Select only 'id' and 'prediction', sort by 'id'
+    test_predictions_with_id = test_predictions.select("id", "prediction").orderBy("id")
     test_predictions_with_id.show(5)
 
-    # 3. Write test predictions to HDFS (only 'id' and 'prediction')
+    # Write test predictions to HDFS (only 'id' and 'prediction')
     print("Writing predictions to CSV...")
     test_predictions_with_id.coalesce(1) \
                             .write \
@@ -151,7 +160,33 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
                             .csv(f"{output_path}/predictions", header=True)
     print(f"Test predictions saved to: {output_path}/predictions")
 
-    return model, test_predictions_with_id
+    # Calculate total processing time
+    end_time = time.time()
+    total_processing_time = end_time - start_time
+    print(f"Total processing time: {total_processing_time:.2f} seconds")
+
+    # Combine all metrics into a single file
+    tree_structure = best_model.toDebugString
+    feature_importances = best_model.featureImportances.toArray().tolist()
+    feature_importance_dict = dict(zip(feature_cols, feature_importances))
+    model_metrics = [
+        ("Tree", tree_structure),
+        ("Features Importance", str(feature_importance_dict)),
+        ("Valid RMSE", str(best_rmse)),
+        ("Valid R2", str(best_r2)),
+        ("Best Max Depth", str(best_max_depth)),
+        ("Impurity", impurity),
+        ("Training Time (Seconds)", str(best_training_time)),
+        ("Total Processing Time (Seconds)", str(total_processing_time)),
+    ]
+    model_metrics_df = spark.createDataFrame(model_metrics, ["Metric", "Value"])
+    model_metrics_df.coalesce(1) \
+                    .write \
+                    .mode("overwrite") \
+                    .csv(f"{output_path}/model_metrics", header=True)
+    print(f"All metrics saved to: {output_path}/model_metrics")
+
+    return best_model, test_predictions_with_id, best_training_time, total_processing_time
 
 def main():
     if len(sys.argv) != 4:
@@ -166,7 +201,12 @@ def main():
     spark = SparkSession.builder.appName("NYCTaxiTripRegression").getOrCreate()
 
     try:
-        model, test_predictions = process_and_train_decision_tree(spark, train_input_path, test_input_path, output_path)
+        model, test_predictions, training_time, total_processing_time = process_and_train_decision_tree(
+            spark, train_input_path, test_input_path, output_path
+        )
+        print("\nSummary of Performance Metrics:")
+        print(f"Training Time: {training_time:.2f} seconds")
+        print(f"Total Processing Time: {total_processing_time:.2f} seconds")
     except KeyboardInterrupt:
         print("Interrupted by user, shutting down Spark...")
     finally:
