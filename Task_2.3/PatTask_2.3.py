@@ -4,7 +4,6 @@ import sys
 import time
 import datetime
 
-
 def parse_train_line(line):
     """Parse a single line from train.csv into (id, features, label) with preprocessing."""
     cols = line.split(",")
@@ -81,7 +80,6 @@ def parse_train_line(line):
     except:
         return None
 
-
 def parse_test_line(line):
     """Parse a single line from test.csv into (id, features) with preprocessing."""
     cols = line.split(",")
@@ -132,7 +130,6 @@ def parse_test_line(line):
     except:
         return None
 
-
 def parse_datetime(datetime_str):
     """Convert datetime string to a dictionary of features."""
     try:
@@ -146,7 +143,6 @@ def parse_datetime(datetime_str):
         }
     except:
         return None
-
 
 class LowLevelDecisionTreeRegressor:
     """Custom decision tree regressor implementation."""
@@ -292,7 +288,6 @@ class LowLevelDecisionTreeRegressor:
                 self.tree_to_string(node["right"], depth + 1)
         )
 
-
 def load_and_preprocess_train_data(sc, file_path, seed=42):
     """Load and split training data into training and validation RDDs."""
     lines = sc.textFile(file_path)
@@ -306,7 +301,6 @@ def load_and_preprocess_train_data(sc, file_path, seed=42):
     print(f"Training set size: {train_rdd.count()}, Validation set size: {valid_rdd.count()}")
     return train_rdd, valid_rdd
 
-
 def load_and_preprocess_test_data(sc, file_path):
     """Load and preprocess test data into an RDD."""
     lines = sc.textFile(file_path)
@@ -317,7 +311,6 @@ def load_and_preprocess_test_data(sc, file_path):
     data.cache()
     print(f"Test set size: {data.count()}")
     return data
-
 
 def grid_search(train_data, valid_rdd, feature_cols, max_depths):
     """Perform grid search over max_depth to find the best model."""
@@ -357,7 +350,6 @@ def grid_search(train_data, valid_rdd, feature_cols, max_depths):
             best_model, best_max_depth, best_training_time = dt, max_depth, training_time
 
     return best_model, best_rmse, best_r2, best_max_depth, best_training_time
-
 
 def main():
     """Entry point for the script."""
@@ -464,7 +456,6 @@ def main():
     finally:
         # Ensure Spark session is closed
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
