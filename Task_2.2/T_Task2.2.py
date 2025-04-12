@@ -248,14 +248,7 @@ if __name__ == "__main__":
     if len(sys.argv) != 4:
         print("Usage: TreeClassification <train_file> <test_file> <output_file>")
         sys.exit(-1)
-    spark = SparkSession.builder \
-        .appName("TreeClassification") \
-        .config("spark.driver.memory", "8g") \
-        .config("spark.executor.memory", "8g") \
-        .config("spark.executor.cores", "4") \
-        .config("spark.executor.instances", "4") \
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-        .getOrCreate()
+    spark = SparkSession.builder.appName("TreeClassification").getOrCreate()
         
     # Get parameters
     train_file, test_file, output_file = sys.argv[1], sys.argv[2], sys.argv[3]
