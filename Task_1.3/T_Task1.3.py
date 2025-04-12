@@ -121,7 +121,7 @@ def preprocessing(rdd_data):
     # Normalize features using z-score normalization
     normalized_train_rdd = z_score_normalize(train_rdd, mean_values, std_values).cache()
     normalized_val_rdd = z_score_normalize(val_rdd, mean_values, std_values).cache()
-   _normalized_test_rdd = z_score_normalize(test_rdd, mean_values, std_values).cache()
+    normalized_test_rdd = z_score_normalize(test_rdd, mean_values, std_values).cache()
     
     return normalized_train_rdd, normalized_val_rdd, normalized_test_rdd
 
