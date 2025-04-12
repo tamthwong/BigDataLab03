@@ -266,7 +266,7 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
     train_split, test_split = train_final.randomSplit([0.8, 0.2], seed=42)
 
     # Perform grid search to find optimal max_depth
-    max_depths = list(range(1, 15))
+    max_depths = list(range(1, 21))
     best_model, best_rmse, best_r2, best_max_depth, best_training_time = grid_search(
         train_split, test_split, max_depths, impurity="variance"
     )
