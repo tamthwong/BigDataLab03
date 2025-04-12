@@ -412,12 +412,7 @@ def main(input_path, output_path):
         output_path: Path to save output results
     """
     # Initialize Spark session with resource configurations
-    spark = SparkSession.builder \
-        .appName("Gradient_Descent_RDD_Optimized") \
-        .config("spark.driver.memory", "8g") \
-        .config("spark.executor.memory", "8g") \
-        .config("spark.executor.cores", "4") \
-        .getOrCreate()
+    spark = SparkSession.builder.appName("Gradient_Descent_RDD_Optimized").getOrCreate()
     sc = spark.sparkContext
 
     # Load and preprocess data
