@@ -165,6 +165,9 @@ def preprocess_test_data(spark, data, feature_cols):
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
     assembled_data = assembler.transform(data)
 
+    # Join back with id_data
+    assembled_data = assembled_data.join(id_data, "id", "inner")
+
     print("Test preprocessing complete.")
     return assembled_data
 
