@@ -8,7 +8,6 @@ from pyspark.ml.evaluation import RegressionEvaluator
 import sys
 import time
 
-
 def preprocess_train_data(spark, data):
     """
     Preprocess training data by cleaning, filtering outliers, and extracting features.
@@ -109,7 +108,6 @@ def preprocess_train_data(spark, data):
     print("Train preprocessing complete.")
     return assembled_data, feature_cols, id_data
 
-
 def preprocess_test_data(spark, data, feature_cols):
     """
     Preprocess test data to align with training data features.
@@ -169,7 +167,6 @@ def preprocess_test_data(spark, data, feature_cols):
 
     print("Test preprocessing complete.")
     return assembled_data
-
 
 def grid_search(train_split, test_split, max_depths, impurity="variance"):
     """
@@ -235,7 +232,6 @@ def grid_search(train_split, test_split, max_depths, impurity="variance"):
     print(f"Best R²: {best_r2:.4f}")
     print(f"Training time for best model: {best_training_time:.2f} seconds")
     return best_model, best_rmse, best_r2, best_max_depth, best_training_time
-
 
 def process_and_train_decision_tree(spark, train_input_path, test_input_path, output_path):
     """
@@ -329,7 +325,6 @@ def process_and_train_decision_tree(spark, train_input_path, test_input_path, ou
 
     return best_model, test_predictions_with_id, best_training_time, total_processing_time
 
-
 def main():
     """
     Entry point for the script, handling input arguments and orchestrating execution.
@@ -362,7 +357,6 @@ def main():
     finally:
         # Ensure Spark session is properly closed
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
