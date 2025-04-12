@@ -119,12 +119,6 @@ def preprocess_test_data(spark, data, feature_cols):
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
     assembled_data = assembler.transform(data)
 
-    # Apply na.drop()
-    assembled_data = assembled_data.na.drop()
-
-    # Join back with id_data to keep only the rows that survived na.drop()
-    assembled_data = assembled_data.join(id_data, "id", "inner")
-
     print("Test preprocessing complete.")
     return assembled_data
 
