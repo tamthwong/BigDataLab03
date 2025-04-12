@@ -4,8 +4,17 @@ import sys
 import time
 import datetime
 
+
 def parse_train_line(line):
-    """Parse a single line from train.csv into (id, features, label) with preprocessing."""
+    """
+    Parse a single line from train.csv into (id, features, label) with preprocessing.
+
+    Args:
+        line: String representing a CSV row
+
+    Returns:
+        Tuple of (id, features, label) or None if parsing fails
+    """
     cols = line.split(",")
     try:
         id_val = cols[0]
@@ -21,53 +30,53 @@ def parse_train_line(line):
         pickup_longitude, pickup_latitude = float(cols[5]), float(cols[6])
         dropoff_longitude, dropoff_latitude = float(cols[7]), float(cols[8])
 
-        # Encode store_and_fwd_flag as binary
+        # Encode store_and_fwd_flag as binary (1 for 'Y'/'yes', 0 otherwise)
         store_and_fwd_flag = 1.0 if cols[9] in ["Y", "yes"] else 0.0
         trip_duration = float(cols[10])
 
-        # Validate trip duration against calculated duration (2-minute tolerance)
+        # Verify trip duration consistency (within 2 minutes of calculated duration)
         calculated_duration = dropoff_dt["timestamp"] - pickup_dt["timestamp"]
         if abs(trip_duration - calculated_duration) > 120:
             return None
 
-        # Filter out trips with duration < 60s or > 6h
+        # Filter unrealistic trip durations (< 60s or > 6h)
         if trip_duration <= 60 or trip_duration >= 6 * 3600:
             return None
 
-        # Ensure coordinates are within NYC bounds
+        # Restrict coordinates to NYC bounds
         if not (
                 -74.3 < pickup_longitude < -73.7 and 40.5 < pickup_latitude < 41.0 and
                 -74.3 < dropoff_longitude < -73.7 and 40.5 < dropoff_latitude < 41.0
         ):
             return None
 
-        # Extract datetime features
+        # Extract temporal features
         day_of_month, month = pickup_dt["day_of_month"], pickup_dt["month"]
         day_of_week, hour = pickup_dt["day_of_week"], pickup_dt["hour"]
 
         # Flag peak hours (7-9 AM, 4-6 PM)
         peak_hour = 1.0 if hour in (7, 8, 9, 16, 17, 18) else 0.0
 
-        # Calculate Haversine distance between pickup and dropoff
+        # Compute Haversine distance
         lat1, lon1 = radians(pickup_latitude), radians(pickup_longitude)
         lat2, lon2 = radians(dropoff_latitude), radians(dropoff_longitude)
         dlat, dlon = lat2 - lat1, lon2 - lon1
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
         distance_haversine = 2 * asin(sqrt(a)) * 6371
 
-        # Filter out trips with speed > 100 km/h
+        # Filter trips with speed > 100 km/h
         speed = distance_haversine / (trip_duration / 3600)
         if speed >= 100:
             return None
 
-        # Collect features for model input
+        # Assemble feature list
         features = [
             vendor_id, passenger_count, pickup_longitude, pickup_latitude,
             dropoff_longitude, dropoff_latitude, day_of_month, month,
             day_of_week, hour, store_and_fwd_flag, peak_hour, distance_haversine
         ]
 
-        # Check for invalid feature values
+        # Validate features for invalid values
         if any(
                 v is None or
                 (isinstance(v, float) and (v != v or v in (float('inf'), float('-inf'))))
@@ -80,8 +89,17 @@ def parse_train_line(line):
     except:
         return None
 
+
 def parse_test_line(line):
-    """Parse a single line from test.csv into (id, features) with preprocessing."""
+    """
+    Parse a single line from test.csv into (id, features) with preprocessing.
+
+    Args:
+        line: String representing a CSV row
+
+    Returns:
+        Tuple of (id, features) or None if parsing fails
+    """
     cols = line.split(",")
     try:
         id_val = cols[0]
@@ -99,26 +117,26 @@ def parse_test_line(line):
         # Encode store_and_fwd_flag
         store_and_fwd_flag = 1.0 if cols[8] in ["Y", "yes"] else 0.0
 
-        # Extract datetime features
+        # Extract temporal features
         day_of_month, month = pickup_dt["day_of_month"], pickup_dt["month"]
         day_of_week, hour = pickup_dt["day_of_week"], pickup_dt["hour"]
         peak_hour = 1.0 if hour in (7, 8, 9, 16, 17, 18) else 0.0
 
-        # Calculate Haversine distance
+        # Compute Haversine distance
         lat1, lon1 = radians(pickup_latitude), radians(pickup_longitude)
         lat2, lon2 = radians(dropoff_latitude), radians(dropoff_longitude)
         dlat, dlon = lat2 - lat1, lon2 - lon1
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
         distance_haversine = 2 * asin(sqrt(a)) * 6371
 
-        # Collect features
+        # Assemble feature list
         features = [
             vendor_id, passenger_count, pickup_longitude, pickup_latitude,
             dropoff_longitude, dropoff_latitude, day_of_month, month,
             day_of_week, hour, store_and_fwd_flag, peak_hour, distance_haversine
         ]
 
-        # Check for invalid feature values
+        # Validate features
         if any(
                 v is None or
                 (isinstance(v, float) and (v != v or v in (float('inf'), float('-inf'))))
@@ -130,8 +148,17 @@ def parse_test_line(line):
     except:
         return None
 
+
 def parse_datetime(datetime_str):
-    """Convert datetime string to a dictionary of features."""
+    """
+    Convert datetime string to a dictionary of features.
+
+    Args:
+        datetime_str: String in format 'YYYY-MM-DD HH:MM:SS'
+
+    Returns:
+        Dictionary with day_of_month, month, day_of_week, hour, and timestamp, or None if parsing fails
+    """
     try:
         dt = datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
         return {
@@ -144,23 +171,48 @@ def parse_datetime(datetime_str):
     except:
         return None
 
+
 class LowLevelDecisionTreeRegressor:
-    """Custom decision tree regressor implementation."""
+    """Custom decision tree regressor for predicting continuous values."""
 
     def __init__(self, max_depth, feature_names):
-        """Initialize the tree with max depth and feature names."""
+        """
+        Initialize the decision tree.
+
+        Args:
+            max_depth: Maximum depth of the tree
+            feature_names: List of feature names
+        """
         self.max_depth = max_depth
         self.feature_names = feature_names
         self.tree = None
 
     def compute_split(self, data, feature_idx, threshold):
-        """Split data based on a feature and threshold."""
+        """
+        Split data based on a feature and threshold.
+
+        Args:
+            data: List of (id, features, label) tuples
+            feature_idx: Index of the feature to split on
+            threshold: Threshold value for the split
+
+        Returns:
+            Tuple of (left, right) data subsets
+        """
         left = [x for x in data if x[1][feature_idx] <= threshold]
         right = [x for x in data if x[1][feature_idx] > threshold]
         return left, right
 
     def compute_variance(self, data):
-        """Calculate variance and count of data points."""
+        """
+        Calculate variance and count of labels in the data.
+
+        Args:
+            data: List of (id, features, label) tuples
+
+        Returns:
+            Tuple of (variance, count)
+        """
         labels = [x[2] for x in data]
         if not labels:
             return 0.0, 0.0
@@ -169,7 +221,16 @@ class LowLevelDecisionTreeRegressor:
         return variance, len(labels)
 
     def find_best_split(self, data, feature_indices):
-        """Find the best feature and threshold to split data."""
+        """
+        Find the best feature and threshold for splitting data.
+
+        Args:
+            data: List of (id, features, label) tuples
+            feature_indices: Indices of features to consider
+
+        Returns:
+            Tuple of (best_feature_idx, best_threshold, best_left, best_right)
+        """
         best_variance_reduction = float("-inf")
         best_feature_idx, best_threshold, best_left, best_right = None, None, None, None
         total_variance, total_count = self.compute_variance(data)
@@ -196,7 +257,16 @@ class LowLevelDecisionTreeRegressor:
         return best_feature_idx, best_threshold, best_left, best_right
 
     def build_tree(self, data, depth):
-        """Recursively build the decision tree."""
+        """
+        Recursively build the decision tree.
+
+        Args:
+            data: List of (id, features, label) tuples
+            depth: Current depth in the tree
+
+        Returns:
+            Dictionary representing a tree node
+        """
         if depth >= self.max_depth or len(data) < 2:
             labels = [x[2] for x in data]
             return {"leaf": True, "prediction": sum(labels) / len(labels) if labels else 0.0}
@@ -217,14 +287,30 @@ class LowLevelDecisionTreeRegressor:
         }
 
     def fit(self, train_data):
-        """Train the decision tree on the provided data."""
+        """
+        Train the decision tree on the provided data.
+
+        Args:
+            train_data: List of (id, features, label) tuples
+
+        Returns:
+            Self (trained model)
+        """
         if not train_data:
             raise ValueError("Training data is empty.")
         self.tree = self.build_tree(train_data, depth=0)
         return self
 
     def predict(self, features):
-        """Predict the label for a single feature vector."""
+        """
+        Predict the label for a single feature vector.
+
+        Args:
+            features: List of feature values
+
+        Returns:
+            Predicted label (log scale)
+        """
         if self.tree is None:
             raise ValueError("Tree has not been fitted.")
         node = self.tree
@@ -233,7 +319,16 @@ class LowLevelDecisionTreeRegressor:
         return node["prediction"]
 
     def trace_prediction(self, features, feature_names):
-        """Trace the decision path for a feature vector."""
+        """
+        Trace the decision path for a feature vector.
+
+        Args:
+            features: List of feature values
+            feature_names: List of feature names
+
+        Returns:
+            List of strings describing the decision path
+        """
         if self.tree is None:
             raise ValueError("Tree has not been fitted.")
         path = []
@@ -256,7 +351,12 @@ class LowLevelDecisionTreeRegressor:
         return path
 
     def compute_feature_importances(self):
-        """Calculate feature importance based on split frequency."""
+        """
+        Calculate feature importance based on frequency of splits.
+
+        Returns:
+            Dictionary mapping feature names to importance scores
+        """
         feature_counts = {}
 
         def traverse_tree(node):
@@ -274,7 +374,16 @@ class LowLevelDecisionTreeRegressor:
         }
 
     def tree_to_string(self, node=None, depth=0):
-        """Convert the tree to a readable string representation."""
+        """
+        Convert the tree to a readable string.
+
+        Args:
+            node: Current tree node (default: root)
+            depth: Current depth for indentation
+
+        Returns:
+            String representation of the tree
+        """
         node = node or self.tree
         if not node:
             return "No tree fitted."
@@ -288,32 +397,65 @@ class LowLevelDecisionTreeRegressor:
                 self.tree_to_string(node["right"], depth + 1)
         )
 
+
 def load_and_preprocess_train_data(sc, file_path, seed=42):
-    """Load and split training data into training and validation RDDs."""
+    """
+    Load and split training data into training and validation RDDs.
+
+    Args:
+        sc: SparkContext
+        file_path: Path to training CSV
+        seed: Random seed for reproducibility
+
+    Returns:
+        Tuple of (train_rdd, valid_rdd)
+    """
     lines = sc.textFile(file_path)
     header = lines.first()
     data = lines.filter(lambda line: line != header) \
-        .map(parse_train_line) \
-        .filter(lambda x: x is not None)
+                .map(parse_train_line) \
+                .filter(lambda x: x is not None)
     train_rdd, valid_rdd = data.randomSplit([0.8, 0.2], seed=seed)
     train_rdd.cache()
     valid_rdd.cache()
     print(f"Training set size: {train_rdd.count()}, Validation set size: {valid_rdd.count()}")
     return train_rdd, valid_rdd
 
+
 def load_and_preprocess_test_data(sc, file_path):
-    """Load and preprocess test data into an RDD."""
+    """
+    Load and preprocess test data into an RDD.
+
+    Args:
+        sc: SparkContext
+        file_path: Path to test CSV
+
+    Returns:
+        RDD of (id, features) tuples
+    """
     lines = sc.textFile(file_path)
     header = lines.first()
     data = lines.filter(lambda line: line != header) \
-        .map(parse_test_line) \
-        .filter(lambda x: x is not None)
+                .map(parse_test_line) \
+                .filter(lambda x: x is not None)
     data.cache()
     print(f"Test set size: {data.count()}")
     return data
 
+
 def grid_search(train_data, valid_rdd, feature_cols, max_depths):
-    """Perform grid search over max_depth to find the best model."""
+    """
+    Perform grid search over max_depth to find the best model.
+
+    Args:
+        train_data: List of (id, features, label) tuples
+        valid_rdd: Validation RDD
+        feature_cols: List of feature names
+        max_depths: List of max_depth values to try
+
+    Returns:
+        Tuple of (best_model, best_rmse, best_r2, best_max_depth, best_training_time)
+    """
     best_rmse, best_r2 = float("inf"), float("-inf")
     best_model, best_max_depth, best_training_time = None, None, None
 
@@ -322,7 +464,7 @@ def grid_search(train_data, valid_rdd, feature_cols, max_depths):
         print(f"--- Training with maxDepth={max_depth} ---")
         dt = LowLevelDecisionTreeRegressor(max_depth, feature_cols)
 
-        # Record training time
+        # Time the training process
         start_time = time.time()
         dt.fit(train_data)
         training_time = time.time() - start_time
@@ -333,33 +475,38 @@ def grid_search(train_data, valid_rdd, feature_cols, max_depths):
             lambda x: (exp(x[2]) - 1, exp(dt.predict(x[1])) - 1)
         )
 
-        # Calculate RMSE
+        # Compute RMSE
         valid_mse = valid_predictions.map(lambda x: (x[0] - x[1]) ** 2).mean()
         valid_rmse = sqrt(valid_mse)
 
-        # Calculate R²
+        # Compute R²
         valid_labels = valid_predictions.map(lambda x: x[0]).collect()
         mean_label = sum(valid_labels) / len(valid_labels)
         ss_tot = sum((y - mean_label) ** 2 for y in valid_labels)
         ss_res = valid_mse * len(valid_labels)
         valid_r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
 
-        print(f"RMSE (validation): {valid_rmse:.4f}, R²: {valid_r2:.4f}")
+        print(f"RMSE (validation): {valid_rmse:.2f}, R²: {valid_r2:.4f}")
         if valid_rmse < best_rmse:
             best_rmse, best_r2 = valid_rmse, valid_r2
             best_model, best_max_depth, best_training_time = dt, max_depth, training_time
 
     return best_model, best_rmse, best_r2, best_max_depth, best_training_time
 
+
 def main():
-    """Entry point for the script."""
+    """
+    Entry point for the script, handling input arguments and execution.
+
+    Expects command-line arguments: train_input_path, test_input_path, output_path
+    """
     if len(sys.argv) != 4:
         print("Usage: spark-submit script.py <train_input_path> <test_input_path> <output_path>")
         sys.exit(1)
 
     train_input_path, test_input_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    # Record total processing time
+    # Start timing the entire process
     total_start_time = time.time()
 
     # Initialize Spark session
@@ -378,24 +525,24 @@ def main():
         train_rdd, valid_rdd = load_and_preprocess_train_data(sc, train_input_path)
         train_data = train_rdd.collect()
 
-        # Perform grid search
-        max_depths = list(range(1, 15))
+        # Perform grid search to find best model
+        max_depths = list(range(1, 21))
         best_model, best_rmse, best_r2, best_max_depth, best_training_time = grid_search(
             train_data, valid_rdd, feature_cols, max_depths
         )
         print(
             f"\nBest model: maxDepth={best_max_depth}, "
-            f"RMSE={best_rmse:.4f}, R²={best_r2:.4f}, Training time={best_training_time:.2f}s"
+            f"RMSE={best_rmse:.2f}, R²={best_r2:.4f}, Training time={best_training_time:.2f}s"
         )
 
-        # Calculate training RMSE
+        # Compute training RMSE
         train_predictions = train_rdd.map(
             lambda x: (exp(x[2]) - 1, exp(best_model.predict(x[1])) - 1)
         )
         train_rmse = sqrt(train_predictions.map(lambda x: (x[0] - x[1]) ** 2).mean())
-        print(f"Train RMSE: {train_rmse:.4f}")
+        print(f"Train RMSE: {train_rmse:.2f}")
 
-        # Get feature importances and tree structure
+        # Extract feature importances and tree structure
         feature_importances = best_model.compute_feature_importances()
         tree_structure = best_model.tree_to_string()
 
@@ -408,12 +555,12 @@ def main():
         )
         predictions = predictions_rdd.collect()
 
-        # Format and save predictions
+        # Save predictions to CSV
         formatted_predictions = [f"{id_val},{pred:.2f}" for id_val, pred in predictions]
         formatted_predictions.insert(0, "id,prediction")
         sc.parallelize(formatted_predictions) \
-            .coalesce(1) \
-            .saveAsTextFile(f"{output_path}/predictions")
+          .coalesce(1) \
+          .saveAsTextFile(f"{output_path}/predictions")
         print(f"Predictions saved to: {output_path}/predictions")
 
         # Calculate total processing time
@@ -421,26 +568,26 @@ def main():
 
         # Save model metrics
         model_metrics = [
-            f"Tree: {tree_structure}",
-            f"Features Importance: {feature_importances}",
-            f"Valid RMSE: {best_rmse:.4f}",
-            f"Valid R2: {best_r2:.4f}",
+            f"Tree Structure: {tree_structure}",
+            f"Feature Importances: {feature_importances}",
+            f"Validation RMSE: {best_rmse:.2f}",
+            f"Validation R2: {best_r2:.4f}",
             f"Best Max Depth: {best_max_depth}",
             f"Impurity: variance",
             f"Training Time (Seconds): {best_training_time:.2f}",
             f"Total Processing Time (Seconds): {total_processing_time:.2f}"
         ]
         sc.parallelize(model_metrics) \
-            .coalesce(1) \
-            .saveAsTextFile(f"{output_path}/model_metrics")
+          .coalesce(1) \
+          .saveAsTextFile(f"{output_path}/model_metrics")
         print(f"Model metrics saved to: {output_path}/model_metrics")
 
-        # Display performance summary
+        # Print performance summary
         print("\nSummary of Performance Metrics:")
         print(f"Training Time: {best_training_time:.2f} seconds")
         print(f"Total Processing Time: {total_processing_time:.2f} seconds")
 
-        # Show sample predictions with tree traversal
+        # Display sample predictions with decision paths
         print("\nSample Predictions (first 3 test records):")
         sample_data = test_rdd.take(3)
         for id_val, features in sample_data:
@@ -456,6 +603,7 @@ def main():
     finally:
         # Ensure Spark session is closed
         spark.stop()
+
 
 if __name__ == "__main__":
     main()
