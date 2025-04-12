@@ -169,7 +169,7 @@ def RDDTreeClassification(spark, train_file, test_file, output_file):
     
     # Grid search's combination
     model_candidate = {
-        'maxDepths': list(range(1, 14)),
+        'maxDepths': list(range(1, 20)),
         'impurity': 'variance',
     }
     
