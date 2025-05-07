@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import col, avg, stddev, window, from_json, to_timestamp, collect_list, struct, lit, when, size
+from pyspark.sql.functions import col, avg, stddev, window, from_json, to_timestamp, collect_list, struct, lit, when, size, count
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
 import os
 
@@ -109,14 +109,17 @@ class WindowStatsProcessor:
         ) \
             .agg(
                 avg("price").alias("avg_price"),
-                stddev("price").alias("std_price")
+                stddev("price").alias("std_price"),
+                count("price").alias("count")
             ) \
             .select(
                 col("win.end").alias("timestamp"),
                 col("symbol"),
                 lit(abbr).alias("window"),
                 when(col("avg_price").isNotNull(), col("avg_price")).otherwise(lit(None)).alias("avg_price"),
-                when(col("std_price").isNotNull(), col("std_price")).otherwise(lit(None)).alias("std_price")
+                when(col("count") == 1, lit(0.0)).otherwise(
+                    when(col("std_price").isNotNull(), col("std_price")).otherwise(lit(None))
+                ).alias("std_price")
             )
         return stats_df
 
@@ -124,14 +127,8 @@ class StatsAggregator:
     """Aggregates windowed statistics into the final output format."""
     def aggregate(self, df: DataFrame) -> DataFrame:
         """Groups window stats by timestamp and symbol into an array."""
-        aggregated_df = df.groupBy("timestamp", "symbol") \
-            .agg(
-                when(
-                    size(collect_list(struct("window", "avg_price", "std_price"))) > 0,
-                    collect_list(struct("window", "avg_price", "std_price"))
-                ).otherwise(lit(None)).alias("windows")
-            )
-        return aggregated_df
+        return df.groupBy("timestamp", "symbol") \
+            .agg(collect_list(struct("window", "avg_price", "std_price")).alias("windows"))
 
 class PipelineOrchestrator:
     """Coordinates the streaming pipeline."""
@@ -147,7 +144,7 @@ class PipelineOrchestrator:
         self.window_processor = WindowStatsProcessor()
         self.aggregator = StatsAggregator()
         self.input_topic = input_topic
-        self.intermediate_topic = input_topic + "-moving-wins"
+        self.intermediate_topic = output_topic + "-wins"
         self.output_topic = output_topic
 
     def run(self):
@@ -178,8 +175,8 @@ class PipelineOrchestrator:
         # Await termination
         self.spark.streams.awaitAnyTermination()
 
-if __name__ == "__main__":
-    checkpoint_path = "/tmp/spark_checkpoint/btc-price-moving-1"
+def main():
+    checkpoint_path = "/tmp/spark_checkpoint/btc-price-moving-0"
     pipeline = PipelineOrchestrator(
         kafka_bootstrap_servers="localhost:9092",
         input_topic="btc-price",
@@ -187,3 +184,6 @@ if __name__ == "__main__":
         checkpoint_dir=checkpoint_path
     )
     pipeline.run()
+
+if __name__ == "__main__":
+    main()
