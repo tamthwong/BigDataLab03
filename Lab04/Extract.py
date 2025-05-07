@@ -57,6 +57,6 @@ if __name__ == "__main__":
     producer = BTCPriceProducer(
         kafka_bootstrap_servers='localhost:9092',
         topic='btc-price',
-        fetch_interval_ms=1000
+        fetch_interval_ms=100
     )
     producer.run()

@@ -1,86 +1,189 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import col, avg, stddev, window, from_json, to_timestamp, collect_list, struct, lit, when, size
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+import os
 
-# Khởi tạo SparkSession
-spark = SparkSession.builder \
-    .appName("MovingStats") \
-    .master("local[*]") \
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5") \
-    .getOrCreate()
+class SparkConfig:
+    """Handles Spark session creation and configuration."""
+    def __init__(self, app_name: str, kafka_bootstrap_servers: str):
+        self.app_name = app_name
+        self.kafka_bootstrap_servers = kafka_bootstrap_servers
 
-# Định nghĩa schema
-schema = StructType([
-    StructField("symbol", StringType(), False),
-    StructField("price", DoubleType(), False),
-    StructField("timestamp", StringType(), False)
-])
+    def create_spark_session(self) -> SparkSession:
+        """Creates and configures a Spark session with Kafka integration."""
+        return SparkSession.builder \
+            .appName(self.app_name) \
+            .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5") \
+            .getOrCreate()
 
-# Đọc từ Kafka
-df = spark \
-    .readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "btc-price") \
-    .option("startingOffsets", "latest") \
-    .load() \
-    .selectExpr("CAST(value AS STRING)") \
-    .select(from_json(col("value"), schema).alias("data")) \
-    .select("data.*") \
-    .withColumn("event_time", to_timestamp(col("timestamp")))
+class KafkaReader:
+    """Manages reading from Kafka topics."""
+    def __init__(self, spark: SparkSession, bootstrap_servers: str):
+        self.spark = spark
+        self.bootstrap_servers = bootstrap_servers
+        self.raw_schema = StructType([
+            StructField("symbol", StringType(), True),
+            StructField("price", DoubleType(), True),
+            StructField("timestamp", StringType(), True)
+        ])
+        self.inter_schema = StructType([
+            StructField("timestamp", TimestampType(), True),
+            StructField("symbol", StringType(), True),
+            StructField("window", StringType(), True),
+            StructField("avg_price", DoubleType(), True),
+            StructField("std_price", DoubleType(), True)
+        ])
 
-# Danh sách các cửa sổ thời gian
-windows = [
-    ("30 seconds", "window_30s", "30s"),
-    ("1 minute", "window_1m", "1m")
-]
+    def read_raw_stream(self, topic: str) -> DataFrame:
+        """Reads and parses raw streaming data from a Kafka topic."""
+        raw_df = self.spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("subscribe", topic) \
+            .option("startingOffsets", "earliest") \
+            .load()
 
-# Tính toán cho từng cửa sổ và gộp kết quả
-window_dfs = []
-for window_duration, window_alias, window_label in windows:
-    window_df = df \
-        .withWatermark("event_time", "10 seconds") \
-        .groupBy(
-            col("symbol"),
-            window(col("event_time"), window_duration).alias(window_alias)
-        ) \
-        .agg(
-            avg("price").alias(f"avg_price_{window_label}"),
-            stddev("price").alias(f"std_price_{window_label}")
-        ) \
-        .select(
-            col("symbol"),
-            to_timestamp(col(f"{window_alias}.end")).alias("timestamp"),
-            lit(window_label).alias("window"),
-            col(f"avg_price_{window_label}").alias("avg_price"),
-            col(f"std_price_{window_label}").alias("std_price")
+        parsed_df = raw_df.selectExpr("CAST(value AS STRING)") \
+            .select(from_json(col("value"), self.raw_schema).alias("data")) \
+            .select("data.*") \
+            .withColumn("timestamp", to_timestamp(col("timestamp"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+            .withWatermark("timestamp", "10 seconds")
+        return parsed_df
+
+    def read_intermediate_stream(self, topic: str) -> DataFrame:
+        """Reads and parses intermediate window stats from a Kafka topic."""
+        interm_df = self.spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("subscribe", topic) \
+            .option("startingOffsets", "earliest") \
+            .load() \
+            .selectExpr("CAST(value AS STRING)") \
+            .select(from_json(col("value"), self.inter_schema).alias("data")) \
+            .select("data.*") \
+            .withWatermark("timestamp", "10 seconds")
+        return interm_df
+
+class KafkaWriter:
+    """Manages writing to Kafka topics."""
+    def __init__(self, bootstrap_servers: str, checkpoint_dir: str):
+        self.bootstrap_servers = bootstrap_servers
+        self.checkpoint_dir = checkpoint_dir
+        os.makedirs(self.checkpoint_dir.replace("file://", ""), exist_ok=True)
+
+    def write_stream(self, df: DataFrame, topic: str, checkpoint_subdir: str) -> None:
+        """Writes a DataFrame to a Kafka topic."""
+        kafka_df = df.selectExpr(
+            "CAST(symbol AS STRING) AS key",
+            "to_json(struct(*)) AS value"
         )
-    window_dfs.append(window_df)
+        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_subdir)
+        os.makedirs(checkpoint_path.replace("file://", ""), exist_ok=True)
+        kafka_df.writeStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("topic", topic) \
+            .option("checkpointLocation", checkpoint_path) \
+            .outputMode("append") \
+            .start()
 
-# Gộp tất cả các DataFrame theo symbol và timestamp
-combined_df = window_dfs[0]
-for window_df in window_dfs[1:]:
-    combined_df = combined_df.unionByName(window_df)
+class WindowStatsProcessor:
+    """Computes windowed statistics (average and standard deviation)."""
+    def __init__(self):
+        self.window_map = {
+            "30 seconds": "30s",
+            "1 minute": "1m",
+            "5 minutes": "5m",
+            "15 minutes": "15m",
+            "30 minutes": "30m",
+            "1 hour": "1h"
+        }
+        self.windows = ["30 seconds", "1 minute", "5 minutes", "15 minutes", "30 minutes", "1 hour"]
 
-# Áp dụng watermark trước aggregation cuối cùng
-combined_df = combined_df.withWatermark("timestamp", "10 seconds")
+    def compute_stats(self, df: DataFrame, window_duration: str) -> DataFrame:
+        """Computes average and standard deviation for a given window duration."""
+        abbr = self.window_map.get(window_duration, window_duration)
+        stats_df = df.groupBy(
+            window(col("timestamp"), window_duration).alias("win"),
+            col("symbol")
+        ) \
+            .agg(
+                avg("price").alias("avg_price"),
+                stddev("price").alias("std_price")
+            ) \
+            .select(
+                col("win.end").alias("timestamp"),
+                col("symbol"),
+                lit(abbr).alias("window"),
+                when(col("avg_price").isNotNull(), col("avg_price")).otherwise(lit(None)).alias("avg_price"),
+                when(col("std_price").isNotNull(), col("std_price")).otherwise(lit(None)).alias("std_price")
+            )
+        return stats_df
 
-# Nhóm lại để tạo cấu trúc mảng windows
-output = combined_df \
-    .groupBy("symbol", "timestamp") \
-    .agg(
-        collect_list(struct("window", "avg_price", "std_price")).alias("windows")
+class StatsAggregator:
+    """Aggregates windowed statistics into the final output format."""
+    def aggregate(self, df: DataFrame) -> DataFrame:
+        """Groups window stats by timestamp and symbol into an array."""
+        aggregated_df = df.groupBy("timestamp", "symbol") \
+            .agg(
+                when(
+                    size(collect_list(struct("window", "avg_price", "std_price"))) > 0,
+                    collect_list(struct("window", "avg_price", "std_price"))
+                ).otherwise(lit(None)).alias("windows")
+            )
+        return aggregated_df
+
+class PipelineOrchestrator:
+    """Coordinates the streaming pipeline."""
+    def __init__(self,
+                 kafka_bootstrap_servers: str,
+                 input_topic: str,
+                 output_topic: str,
+                 checkpoint_dir: str):
+        self.spark_config = SparkConfig("Transformer", kafka_bootstrap_servers)
+        self.spark = self.spark_config.create_spark_session()
+        self.kafka_reader = KafkaReader(self.spark, kafka_bootstrap_servers)
+        self.kafka_writer = KafkaWriter(kafka_bootstrap_servers, checkpoint_dir)
+        self.window_processor = WindowStatsProcessor()
+        self.aggregator = StatsAggregator()
+        self.input_topic = input_topic
+        self.intermediate_topic = input_topic + "-moving-wins"
+        self.output_topic = output_topic
+
+    def run(self):
+        """Runs the streaming pipeline."""
+        print("Starting BTC Price Moving Average app...")
+
+        # Read raw data
+        df = self.kafka_reader.read_raw_stream(self.input_topic)
+        print("Input schema:")
+        df.printSchema()
+
+        # Compute windowed statistics
+        stats = None
+        for w in self.window_processor.windows:
+            win_df = self.window_processor.compute_stats(df, w)
+            stats = win_df if stats is None else stats.unionByName(win_df)
+
+        # Write intermediate stats
+        self.kafka_writer.write_stream(stats, self.intermediate_topic, "moving_window")
+
+        # Read and aggregate intermediate stats
+        interm_df = self.kafka_reader.read_intermediate_stream(self.intermediate_topic)
+        grouped_df = self.aggregator.aggregate(interm_df)
+
+        # Write final output
+        self.kafka_writer.write_stream(grouped_df, self.output_topic, "moving_grouped")
+
+        # Await termination
+        self.spark.streams.awaitAnyTermination()
+
+if __name__ == "__main__":
+    checkpoint_path = "/tmp/spark_checkpoint/btc-price-moving-1"
+    pipeline = PipelineOrchestrator(
+        kafka_bootstrap_servers="localhost:9092",
+        input_topic="btc-price",
+        output_topic="btc-price-moving",
+        checkpoint_dir=checkpoint_path
     )
-
-# Ghi vào Kafka topic btc-price-moving
-query = output \
-    .select(to_json(struct("*")).alias("value")) \
-    .writeStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("topic", "btc-price-moving") \
-    .option("checkpointLocation", "/tmp/spark-checkpoint-moving-1") \
-    .outputMode("append") \
-    .start()
-
-query.awaitTermination()
+    pipeline.run()
