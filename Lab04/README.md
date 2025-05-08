@@ -15,10 +15,10 @@ Required topics:
 - **Extract**:
   - `btc-price`: Stores raw price data fetched from the Binance API.
 - **Transform (Moving Statistics)**:
-  - **`btc-price-moving-wins`**: **Intermediate topic added by the group** to store flattened moving statistics (average and standard deviation) before aggregation.
+  - **`btc-price-moving-wins`**: **Intermediate topic added by our team** to store flattened moving statistics (average and standard deviation) before aggregation.
   - `btc-price-moving`: Stores final moving statistics results.
 - **Transform (Z-score)**:
-  - **`btc-price-zscore-wins`**: **Intermediate topic added by the group** to store flattened statistics for Z-score computation.
+  - **`btc-price-zscore-wins`**: **Intermediate topic added by our team** to store flattened statistics for Z-score computation.
   - `btc-price-zscore`: Stores final Z-score results.
 - **Bonus**:
   - `btc-price-higher`: Stores time windows for price increases.
@@ -32,12 +32,12 @@ bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-fac
 
 Repeat for the remaining topics: `btc-price-moving-wins`, `btc-price-moving`, `btc-price-zscore-wins`, `btc-price-zscore`, `btc-price-higher`, and `btc-price-lower`.
 
-**Note**: The topics `btc-price-moving-wins` and `btc-price-zscore-wins` are **intermediate topics** introduced by the group to facilitate data processing in the Transform stage, simplifying joins and aggregations.
+**Note**: The topics `btc-price-moving-wins` and `btc-price-zscore-wins` are **intermediate topics** introduced by our team to facilitate data processing in the Transform stage, simplifying joins and aggregations.
 
 ## Running Instructions
 
 The executable files are located in the `src/` directory and are run using `spark-submit`, except for the Extract stage, which uses Python. Ensure Kafka and MongoDB are running before executing the scripts.  
-**Spark Configuration Note**: Unless customized, the `spark-submit` commands run with the default configuration `--master local[*] --deploy-mode client` on our system, utilizing all available local cores in client mode.
+**Spark Configuration Note**: Unless customized, the `spark-submit` commands run with the default configuration `--master local[*] --deploy-mode client` on the system, utilizing all available local cores in client mode.
 1. **Extract (`<GroupID>.py`)**:
    - **File**: `src/Extract/<GroupID>.py`
    - **Description**: Fetches BTCUSDT price data from the Binance API and publishes it to the `btc-price` topic.
@@ -49,7 +49,7 @@ The executable files are located in the `src/` directory and are run using `spar
 
 2. **Transform - Moving Statistics (`<GroupID>_moving.py`)**:
    - **File**: `src/Transform/<GroupID>_moving.py`
-   - **Description**: Computes moving averages and standard deviations, publishing intermediate results to **`btc-price-moving-wins`** (group-added intermediate topic) and final results to `btc-price-moving`.
+   - **Description**: Computes moving averages and standard deviations, publishing intermediate results to **`btc-price-moving-wins`** (intermediate topic added by our team) and final results to `btc-price-moving`.
    - **Run**:
      ```bash
      spark-submit src/Transform/<GroupID>_moving.py
@@ -58,7 +58,7 @@ The executable files are located in the `src/` directory and are run using `spar
 
 3. **Transform - Z-score (`<GroupID>_zscore.py`)**:
    - **File**: `src/Transform/<GroupID>_zscore.py`
-   - **Description**: Computes Z-scores using price and moving statistics, publishing intermediate results to **`btc-price-zscore-wins`** (group-added intermediate topic) and final results to `btc-price-zscore`.
+   - **Description**: Computes Z-scores using price and moving statistics, publishing intermediate results to **`btc-price-zscore-wins`** (intermediate topic added by our team) and final results to `btc-price-zscore`.
    - **Run**:
      ```bash
      spark-submit src/Transform/<GroupID>_zscore.py
@@ -72,7 +72,7 @@ The executable files are located in the `src/` directory and are run using `spar
      ```bash
      spark-submit --packages "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5" src/Load/<GroupID>.py
      ```
-   - **Note**: Set the `MONGO_URI` environment variable in `load.py`. The `btc-price-zscore` topic must contain data.
+   - **Note**: You need create a .env file, which contain configuration information for MongoDB API connection. The information should have username, password, and the name of your MongoDB cluster. The `btc-price-zscore` topic must contain data.
 
 5. **Bonus (`<GroupID>_bonus.py`)**:
    - **File**: `src/Bonus/<GroupID>_bonus.py`
@@ -93,7 +93,7 @@ The executable files are located in the `src/` directory and are run using `spar
 
 ### Additional Notes
 
-- **Checkpoint Directories**: Each Spark script uses checkpoint directories at `/tmp/spark_checkpoint_...`. Delete these directories before re-running to avoid conflicts.
+- **Checkpoint Directories**: Each Spark script uses checkpoint directories at `/tmp/spark_checkpoint_...`. Delete these directories or change the script with new checkpoint directories before re-running to avoid conflicts.
 - **Verify Topics**: Use a Kafka consumer to check topic data:
   ```bash
   bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic <topic_name> --from-beginning

@@ -9,7 +9,9 @@ load_dotenv()
 
 MONGO_USER = os.getenv("MONGO_USER")
 MONGO_PASSWORD = os.getenv("MONGO_PASSWORD")
-MONGO_URI = os.getenv("MONGO_URI", f"mongodb+srv://{MONGO_USER}:{MONGO_PASSWORD}@bigdata.r0uwyz9.mongodb.net/?retryWrites=true&w=majority&appName=bigdata")
+MONGO_CLUSTER_NAME = os.getenv("MONGO_CLUSTER_NAME")
+
+MONGO_URI = os.getenv("MONGO_URI", f"mongodb+srv://{MONGO_USER}:{MONGO_PASSWORD}@{MONGO_CLUSTER_NAME}.mongodb.net/?retryWrites=true&w=majority&appName=bigdata")
 MONGO_DB = os.getenv("MONGO_DB", "streaming_db")
 
 # --- INITIALIZE SPARK SESSION ---
