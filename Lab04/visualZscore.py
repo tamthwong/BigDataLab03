@@ -27,7 +27,7 @@ while True:
     message = {
         "timestamp": timestamp,
         "symbol": symbol,
-        "windows": zscores
+        "zscores": zscores
     }
 
     producer.send("btc-price-zscore", value=message)
