@@ -18,9 +18,10 @@ class SparkConfig:
 
 class KafkaReader:
     """Manages reading from Kafka topics."""
-    def __init__(self, spark: SparkSession, bootstrap_servers: str):
+    def __init__(self, spark: SparkSession, bootstrap_servers: str, watermark_duration: str):
         self.spark = spark
         self.bootstrap_servers = bootstrap_servers
+        self.watermark_duration = watermark_duration  # Added watermark duration
         self.price_schema = StructType([
             StructField("symbol", StringType(), True),
             StructField("price", DoubleType(), True),
@@ -59,7 +60,7 @@ class KafkaReader:
                 "data.price",
                 to_timestamp(col("data.timestamp"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX").alias("timestamp")
             ) \
-            .withWatermark("timestamp", "1 hour")
+            .withWatermark("timestamp", self.watermark_duration) # Use the parameter
         return parsed_df
 
     def read_moving_stream(self, topic: str) -> DataFrame:
@@ -78,7 +79,7 @@ class KafkaReader:
                 "data.symbol",
                 "data.windows"
             ) \
-            .withWatermark("timestamp", "1 hour")
+            .withWatermark("timestamp", self.watermark_duration)  # Use the parameter
         return parsed_df
 
     def read_stats_stream(self, topic: str) -> DataFrame:
@@ -99,7 +100,7 @@ class KafkaReader:
                 "data.avg_price",
                 "data.std_price"
             ) \
-            .withWatermark("timestamp", "1 hour")
+            .withWatermark("timestamp", self.watermark_duration)  # Use the parameter
         return parsed_df
 
 class KafkaWriter:
@@ -143,7 +144,7 @@ class ZScoreProcessor:
         return stats_df
 
     def compute_zscores(self, price_df: DataFrame, stats_df: DataFrame) -> DataFrame:
-        """Joins price and stats by window range, computes Z-scores."""
+        """Joins price and stats by window range, computes Z-scores, groups by price timestamp."""
         # Parse window duration from stats_df.window (e.g., '30s' -> 30, '1m' -> 60)
         stats_df = stats_df.select(
             col("timestamp"),
@@ -169,7 +170,7 @@ class ZScoreProcessor:
             stats_df,
             [
                 col("price.symbol") == col("stats.symbol"),
-                col("price.timestamp") >= col("stats.timestamp") - expr("interval 1 hour"),
+                col("price.timestamp") >= col("stats.timestamp") - expr("interval 5 minutes"),
                 col("price.timestamp").cast("long").between(
                     col("stats.timestamp").cast("long") - col("stats.window_seconds"),
                     col("stats.timestamp").cast("long") - 1
@@ -180,8 +181,8 @@ class ZScoreProcessor:
 
         # Compute Z-score: (price - avg_price) / std_price
         zscore_df = joined_df.select(
-            col("stats.timestamp").alias("window_timestamp"),
             col("price.timestamp").alias("price_timestamp"),
+            col("stats.timestamp").alias("window_timestamp"),  # For debugging
             col("price.symbol").alias("symbol"),
             struct(
                 col("stats.window"),
@@ -192,19 +193,13 @@ class ZScoreProcessor:
             ).alias("zscore_struct")
         )
 
-        # Debug: Output zscore_df before aggregation
-        zscore_df.writeStream.format("console").outputMode("append").start()
-
-        # Group by window_timestamp and symbol to collect Z-scores
-        result_df = zscore_df.groupBy("window_timestamp", "symbol") \
+        # Group by price_timestamp and symbol to collect Z-scores
+        result_df = zscore_df.groupBy("price_timestamp", "symbol") \
             .agg(collect_list("zscore_struct").alias("zscores"))
-
-        # Debug: Output result_df before final select
-        result_df.writeStream.format("console").outputMode("append").start()
 
         # Final select
         result_df = result_df.select(
-            col("window_timestamp").alias("timestamp"),
+            col("price_timestamp").alias("timestamp"),
             col("symbol"),
             col("zscores")
         )
@@ -217,28 +212,28 @@ class PipelineOrchestrator:
                  kafka_bootstrap_servers: str,
                  price_topic: str,
                  moving_topic: str,
-                 stats_topic: str,
                  output_topic: str,
-                 checkpoint_dir: str):
+                 checkpoint_dir: str,
+                 watermark_duration: str = "5 minutes"): # Added watermark_duration
         self.spark_config = SparkConfig("ZScoreProcessor", kafka_bootstrap_servers)
         self.spark = self.spark_config.create_spark_session()
-        self.kafka_reader = KafkaReader(self.spark, kafka_bootstrap_servers)
+        self.kafka_reader = KafkaReader(self.spark, kafka_bootstrap_servers, watermark_duration) # Pass to reader
         self.kafka_writer = KafkaWriter(kafka_bootstrap_servers, checkpoint_dir)
         self.zscore_processor = ZScoreProcessor()
         self.price_topic = price_topic
         self.moving_topic = moving_topic
-        self.stats_topic = stats_topic
+        self.intermediate_topic = output_topic + "-wins"
         self.output_topic = output_topic
+        self.watermark_duration = watermark_duration  # Store it
 
     def run(self):
         """Runs the Z-score computation pipeline."""
-        print("Starting BTC Price Z-Score Processor...")
 
         # Read price and moving streams
         price_df = self.kafka_reader.read_price_stream(self.price_topic)
         moving_df = self.kafka_reader.read_moving_stream(self.moving_topic)
 
-        # Debug: Print schemas
+        # Print the schema of the input data
         print("Price stream schema:")
         price_df.printSchema()
         print("Moving stream schema:")
@@ -246,50 +241,15 @@ class PipelineOrchestrator:
 
         # Process moving_df to stats format and write to intermediate topic
         stats_df = self.zscore_processor.process_moving_to_stats(moving_df)
-        self.kafka_writer.write_stream(stats_df, self.stats_topic, "moving_stats")
+        self.kafka_writer.write_stream(stats_df, self.intermediate_topic, "moving_stats")
 
         # Read stats stream
-        stats_input_df = self.kafka_reader.read_stats_stream(self.stats_topic)
+        stats_input_df = self.kafka_reader.read_stats_stream(self.intermediate_topic)
         print("Stats stream schema:")
         stats_input_df.printSchema()
 
         # Compute Z-scores
         zscore_df = self.zscore_processor.compute_zscores(price_df, stats_input_df)
-
-        # Debug: Write intermediate DataFrames to console
-        stats_df.writeStream.format("console").start()
-        zscore_df.writeStream.format("console").start()
-        # Debug join with window range
-        joined_df = price_df.alias("price").join(
-            stats_input_df.select(
-                col("timestamp"),
-                col("symbol"),
-                col("window"),
-                col("avg_price"),
-                col("std_price"),
-                expr("""
-                    CASE
-                        WHEN window = '30s' THEN 30
-                        WHEN window = '1m' THEN 60
-                        WHEN window = '5m' THEN 300
-                        WHEN window = '15m' THEN 900
-                        WHEN window = '30m' THEN 1800
-                        WHEN window = '1h' THEN 3600
-                        ELSE 0
-                END
-                """).cast("long").alias("window_seconds")
-            ).alias("stats"),
-            [
-                col("price.symbol") == col("stats.symbol"),
-                col("price.timestamp") >= col("stats.timestamp") - expr("interval 1 hour"),
-                col("price.timestamp").cast("long").between(
-                    col("stats.timestamp").cast("long") - col("stats.window_seconds"),
-                    col("stats.timestamp").cast("long") - 1
-                )
-            ],
-            "left_outer"
-        )
-        joined_df.writeStream.format("console").start()
 
         # Write results to output topic with append mode
         self.kafka_writer.write_stream(zscore_df, self.output_topic, "zscore", output_mode="append")
@@ -297,14 +257,17 @@ class PipelineOrchestrator:
         # Await termination
         self.spark.streams.awaitAnyTermination()
 
-if __name__ == "__main__":
-    checkpoint_path = "/tmp/spark_checkpoint/btc-price-zscore-0"
+def main():
+    checkpoint_path = "/tmp/spark_checkpoint/btc-price-zscore"
     pipeline = PipelineOrchestrator(
         kafka_bootstrap_servers="localhost:9092",
         price_topic="btc-price",
         moving_topic="btc-price-moving",
-        stats_topic="btc-price-zscore-wins",
         output_topic="btc-price-zscore",
-        checkpoint_dir=checkpoint_path
+        checkpoint_dir=checkpoint_path,
+        watermark_duration="10 seconds"
     )
     pipeline.run()
+
+if __name__ == "__main__":
+    main()

@@ -176,7 +176,7 @@ class PipelineOrchestrator:
         self.spark.streams.awaitAnyTermination()
 
 def main():
-    checkpoint_path = "/tmp/spark_checkpoint/btc-price-moving-0"
+    checkpoint_path = "/tmp/spark_checkpoint/btc-price-moving"
     pipeline = PipelineOrchestrator(
         kafka_bootstrap_servers="localhost:9092",
         input_topic="btc-price",
