@@ -15,10 +15,10 @@ Required topics:
 - **Extract**:
   - `btc-price`: Stores raw price data fetched from the Binance API.
 - **Transform (Moving Statistics)**:
-  - **`btc-price-moving-wins`**: **Intermediate topic added by the group** to store flattened moving statistics (average and standard deviation) before aggregation.
+  - **`btc-price-moving-wins`**: *Intermediate topic added by the group* to store flattened moving statistics (average and standard deviation) before aggregation.
   - `btc-price-moving`: Stores final moving statistics results.
 - **Transform (Z-score)**:
-  - **`btc-price-zscore-wins`**: **Intermediate topic added by the group** to store flattened statistics for Z-score computation.
+  - **`btc-price-zscore-wins`**: *Intermediate topic added by the group* to store flattened statistics for Z-score computation.
   - `btc-price-zscore`: Stores final Z-score results.
 - **Bonus**:
   - `btc-price-higher`: Stores time windows for price increases.
@@ -70,9 +70,9 @@ The executable files are located in the `src/` directory and are run using `spar
    - **Description**: Reads Z-scores from `btc-price-zscore` and stores them in MongoDB collections (`btc_price_zscore_<window>`).
    - **Run**:
      ```bash
-     spark-submit src/Load/<GroupID>.py
+     spark-submit --packages "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5" src/Load/<GroupID>.py
      ```
-   - **Note**: Set the `MONGO_URI` environment variable  `load.py`. The `btc-price-zscore` topic must contain data.
+   - **Note**: Set the `MONGO_URI` environment variable in `load.py`. The `btc-price-zscore` topic must contain data.
 
 5. **Bonus (`<GroupID>_bonus.py`)**:
    - **File**: `src/Bonus/<GroupID>_bonus.py`
