@@ -70,7 +70,7 @@ The executable files are located in the `src/` directory and are run using `spar
    - **Description**: Reads Z-scores from `btc-price-zscore` and stores them in MongoDB collections (`btc_price_zscore_<window>`).
    - **Run**:
      ```bash
-     spark-submit --packages "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5" src/Load/<GroupID>.py
+     spark-submit src/Load/<GroupID>.py
      ```
    - **Note**: You need create a .env file, which contain configuration information for MongoDB API connection. The information should have username, password, and the name of your MongoDB cluster. The `btc-price-zscore` topic must contain data.
 
