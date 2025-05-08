@@ -2,11 +2,14 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, explode
 from pyspark.sql.types import StructType, StructField, StringType, FloatType, ArrayType
 import os
+from dotenv import load_dotenv
 
 # --- MONGODB CONFIGURATION ---
-# MongoDB URI from env variable (set this before running)
-# Example: mongodb+srv://user:password@cluster.mongodb.net/mydb?retryWrites=true&w=majority
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://bigdataStore:2ksGGNqOZM2omRek@bigdata.r0uwyz9.mongodb.net/?retryWrites=true&w=majority&appName=bigdata")
+load_dotenv()
+
+MONGO_USER = os.getenv("MONGO_USER")
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD")
+MONGO_URI = os.getenv("MONGO_URI", f"mongodb+srv://{MONGO_USER}:{MONGO_PASSWORD}@bigdata.r0uwyz9.mongodb.net/?retryWrites=true&w=majority&appName=bigdata")
 MONGO_DB = os.getenv("MONGO_DB", "streaming_db")
 
 # --- INITIALIZE SPARK SESSION ---
