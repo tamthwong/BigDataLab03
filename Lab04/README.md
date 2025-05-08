@@ -72,7 +72,7 @@ The executable files are located in the `src/` directory and are run using `spar
      ```bash
      spark-submit src/Load/<GroupID>.py
      ```
-   - **Note**: Set the `MONGO_URI` environment variable or use the default URI in `load.py`. The `btc-price-zscore` topic must contain data.
+   - **Note**: Set the `MONGO_URI` environment variable  `load.py`. The `btc-price-zscore` topic must contain data.
 
 5. **Bonus (`<GroupID>_bonus.py`)**:
    - **File**: `src/Bonus/<GroupID>_bonus.py`
