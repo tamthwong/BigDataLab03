@@ -181,7 +181,7 @@ class ZScoreProcessor:
                 col("price.symbol") == col("stats.symbol"),
                 col("price.timestamp").isNotNull(),
                 col("stats.timestamp").isNotNull(),
-                col("price.timestamp") >= col("stats.timestamp") - expr("interval 5 minutes"),
+                col("price.timestamp") >= col("stats.timestamp") - expr("interval 1 hour"),
                 col("price.timestamp").cast("long").between(
                     col("stats.timestamp").cast("long") - col("stats.window_seconds"),
                     col("stats.timestamp").cast("long") - 1
