@@ -4,19 +4,17 @@ from pyspark.sql.types import StructType, StructField, StringType, FloatType, Ar
 import os
 
 # --- MONGODB CONFIGURATION ---
-
 # MongoDB URI from env variable (set this before running)
 # Example: mongodb+srv://user:password@cluster.mongodb.net/mydb?retryWrites=true&w=majority
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://bigdataStore:2ksGGNqOZM2omRek@bigdata.r0uwyz9.mongodb.net/?retryWrites=true&w=majority&appName=bigdata")
-MONGO_DB = os.getenv("MONGO_DB", "btc_analysis")
+MONGO_DB = os.getenv("MONGO_DB", "streaming_db")
 
 # --- INITIALIZE SPARK SESSION ---
 spark = SparkSession.builder \
     .appName("BTCPriceZScoreStreaming") \
-    .config("spark.mongodb.output.uri", MONGO_URI) \
-    .config("spark.jars.packages",
-            "org.mongodb.spark:mongo-spark-connector_2.12:10.3.0,"
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
+    .config("spark.mongodb.read.connection.uri", MONGO_URI) \
+    .config("spark.mongodb.write.connection.uri", MONGO_URI) \
+    .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5") \
     .getOrCreate()
 
 # --- DEFINE SCHEMA FOR KAFKA MESSAGE ---
@@ -39,7 +37,7 @@ kafka_df = spark.readStream \
     .option("startingOffsets", "latest") \
     .load()
 
-# --- PARSE JSON AND EXPLODE zscores ARRAY ---
+# --- PARSE JSON AND EXPLODE zscores ARRAY..
 parsed_df = kafka_df.select(
     from_json(col("value").cast("string"), schema).alias("data")
 ).select(
@@ -70,11 +68,12 @@ for window in windows:
 
     try:
         query = window_df.writeStream \
-            .format("mongo") \
-            .option("spark.mongodb.output.uri", MONGO_URI) \
+            .format("com.mongodb.spark.sql.connector.MongoTableProvider") \
+            .option("connection.uri", MONGO_URI) \
             .option("database", MONGO_DB) \
-            .option("collection", f"btc_price_zscore_{window}") \
-            .option("checkpointLocation", f"/tmp/spark_checkpoint_btc_zscore_{window}") \
+            .option("collection", f"btc-price-zscore-{window}") \
+            .option("checkpointLocation", f"/tmp/spark_checkpoint/btc_zscore_{window}") \
+            .option("forceDeleteTempCheckpointLocation", "true") \
             .outputMode("append") \
             .start()
 
@@ -84,7 +83,7 @@ for window in windows:
     except Exception as e:
         print(f"[ERROR] Failed to start stream for window {window}: {str(e)}")
 
-# --- LOG STATUS OF ALL STREAMS PERIODICALLY (OPTIONAL) ---
+# --- LOG STATUS OF ALL STREAMS PERIODICALLY ---
 for query in queries:
     print(f"[STATUS] Stream {query.id} active: {query.isActive}")
 
