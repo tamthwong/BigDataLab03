@@ -83,7 +83,7 @@ class KafkaReader:
         return parsed_df
 
     def read_stats_stream(self, topic: str) -> DataFrame:
-        """Reads and parses intermediate stats from btc-price-moving-stats topic."""
+        """Reads and parses intermediate stats from btc-price-zscore-wins topic."""
         raw_df = self.spark.readStream \
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap_servers) \
@@ -241,7 +241,7 @@ class PipelineOrchestrator:
 
         # Process moving_df to stats format and write to intermediate topic
         stats_df = self.zscore_processor.process_moving_to_stats(moving_df)
-        self.kafka_writer.write_stream(stats_df, self.intermediate_topic, "moving_stats")
+        self.kafka_writer.write_stream(stats_df, self.intermediate_topic, "zscore-wins")
 
         # Read stats stream
         stats_input_df = self.kafka_reader.read_stats_stream(self.intermediate_topic)

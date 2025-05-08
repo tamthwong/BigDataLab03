@@ -163,7 +163,7 @@ class PipelineOrchestrator:
             stats = win_df if stats is None else stats.unionByName(win_df)
 
         # Write intermediate stats
-        self.kafka_writer.write_stream(stats, self.intermediate_topic, "moving_window")
+        self.kafka_writer.write_stream(stats, self.intermediate_topic, "moving_wins")
 
         # Read and aggregate intermediate stats
         interm_df = self.kafka_reader.read_intermediate_stream(self.intermediate_topic)
