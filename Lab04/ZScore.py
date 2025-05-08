@@ -82,7 +82,7 @@ class KafkaReader:
             .withWatermark("timestamp", self.watermark_duration)  # Use the parameter
         return parsed_df
 
-    def read_stats_stream(self, topic: str) -> DataFrame:
+    def read_intermediate_stream(self, topic: str) -> DataFrame:
         """Reads and parses intermediate stats from btc-price-zscore-wins topic."""
         raw_df = self.spark.readStream \
             .format("kafka") \
@@ -278,7 +278,7 @@ class PipelineOrchestrator:
         self.kafka_writer.write_stream(stats_df, self.intermediate_topic, "zscore-wins")
 
         # Read stats stream
-        stats_input_df = self.kafka_reader.read_stats_stream(self.intermediate_topic)
+        stats_input_df = self.kafka_reader.read_intermediate_stream(self.intermediate_topic)
         print("Stats stream schema:")
         stats_input_df.printSchema()
 

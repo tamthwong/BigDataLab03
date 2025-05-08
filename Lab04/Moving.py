@@ -51,7 +51,7 @@ class KafkaReader:
         return parsed_df
 
     def read_intermediate_stream(self, topic: str) -> DataFrame:
-        """Reads and parses intermediate window stats from a Kafka topic."""
+        """Reads and parses intermediate window stats from btc-price-moving-wins topic."""
         interm_df = self.spark.readStream \
             .format("kafka") \
             .option("kafka.bootstrap.servers", self.bootstrap_servers) \
