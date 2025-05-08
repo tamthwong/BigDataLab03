@@ -36,7 +36,7 @@ Repeat for the remaining topics: `btc-price-moving-wins`, `btc-price-moving`, `b
 
 ## Running Instructions
 
-The executable files are located in the `src/` directory and are run using `spark-submit`, except for the Extract stage, which uses Python. Ensure Kafka and MongoDB are running before executing the scripts.
+The executable files are located in the `src/` directory and are run using `spark-submit`, except for the Extract stage, which uses Python. Ensure Kafka and MongoDB are running before executing the scripts.  
 **Spark Configuration Note**: Unless customized, the `spark-submit` commands run with the default configuration `--master local[*] --deploy-mode client` on our system, utilizing all available local cores in client mode.
 1. **Extract (`<GroupID>.py`)**:
    - **File**: `src/Extract/<GroupID>.py`
