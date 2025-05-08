@@ -5,7 +5,7 @@ from pyspark.sql.types import StructType, StringType, TimestampType, StructField
 # Khởi tạo SparkSession
 spark = SparkSession.builder \
     .appName("BTCWindowOOP") \
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5") \
     .getOrCreate()
 
 # Định nghĩa schema cho dữ liệu Kafka
@@ -154,6 +154,3 @@ lower_query = lower_json_df.writeStream \
 # Chờ cả hai luồng kết thúc
 higher_query.awaitTermination()
 lower_query.awaitTermination()
-
-
-
