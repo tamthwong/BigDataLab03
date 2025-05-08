@@ -7,7 +7,7 @@ This section provides instructions for configuring Kafka topics and running the 
 Ensure Kafka is running on `localhost:9092` (or adjust the configuration as needed). Create the following Kafka topics using the `kafka-topics.sh` script:
 
 ```bash
-bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic <topic_name>
+~/kafka/bin/kafka-topics.sh --create --topic <topic_name> --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
 ```
 
 Required topics:
