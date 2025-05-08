@@ -15,10 +15,10 @@ Required topics:
 - **Extract**:
   - `btc-price`: Stores raw price data fetched from the Binance API.
 - **Transform (Moving Statistics)**:
-  - **`btc-price-moving-wins`**: *Intermediate topic added by the group* to store flattened moving statistics (average and standard deviation) before aggregation.
+  - **`btc-price-moving-wins`**: **Intermediate topic added by the group** to store flattened moving statistics (average and standard deviation) before aggregation.
   - `btc-price-moving`: Stores final moving statistics results.
 - **Transform (Z-score)**:
-  - **`btc-price-zscore-wins`**: *Intermediate topic added by the group* to store flattened statistics for Z-score computation.
+  - **`btc-price-zscore-wins`**: **Intermediate topic added by the group** to store flattened statistics for Z-score computation.
   - `btc-price-zscore`: Stores final Z-score results.
 - **Bonus**:
   - `btc-price-higher`: Stores time windows for price increases.
