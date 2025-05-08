@@ -73,7 +73,7 @@ for window in windows:
             .format("mongo") \
             .option("spark.mongodb.output.uri", MONGO_URI) \
             .option("database", MONGO_DB) \
-            .option("collection", f"btc_price_zscore_{window.replace('m', 'min').replace('h', 'hour')}") \
+            .option("collection", f"btc_price_zscore_{window}") \
             .option("checkpointLocation", f"/tmp/spark_checkpoint_btc_zscore_{window}") \
             .outputMode("append") \
             .start()
