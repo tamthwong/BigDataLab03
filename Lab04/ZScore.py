@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import col, from_json, to_timestamp, explode, struct, lit, when, collect_list, expr
+from pyspark.sql.functions import col, from_json, to_timestamp, explode, struct, lit, when, collect_list, expr, udf
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, ArrayType
 import os
 
@@ -129,7 +129,7 @@ class KafkaWriter:
 class ZScoreProcessor:
     """Computes Z-scores for prices based on moving statistics."""
     def process_moving_to_stats(self, moving_df: DataFrame) -> DataFrame:
-        """Explodes windows from btc-price-moving to btc-price-moving-stats format."""
+        """Explodes windows from btc-price-moving to btc-price-zscore-wins format."""
         stats_df = moving_df.select(
             col("timestamp"),
             col("symbol"),
@@ -165,11 +165,22 @@ class ZScoreProcessor:
             """).cast("long").alias("window_seconds")
         ).alias("stats")
 
+        # Filter out nulls to prevent null-related errors
+        stats_df = stats_df.filter(
+            col("stats.timestamp").isNotNull() &
+            col("stats.symbol").isNotNull() &
+            col("stats.window").isNotNull() &
+            col("stats.avg_price").isNotNull() &
+            col("stats.std_price").isNotNull()
+        )
+
         # Left join price_df with stats_df based on price.timestamp falling in window
         joined_df = price_df.alias("price").join(
             stats_df,
             [
                 col("price.symbol") == col("stats.symbol"),
+                col("price.timestamp").isNotNull(),
+                col("stats.timestamp").isNotNull(),
                 col("price.timestamp") >= col("stats.timestamp") - expr("interval 5 minutes"),
                 col("price.timestamp").cast("long").between(
                     col("stats.timestamp").cast("long") - col("stats.window_seconds"),
@@ -179,15 +190,17 @@ class ZScoreProcessor:
             "left_outer"
         )
 
-        # Compute Z-score: (price - avg_price) / std_price
+        # Compute Z-score
         zscore_df = joined_df.select(
             col("price.timestamp").alias("price_timestamp"),
-            col("stats.timestamp").alias("window_timestamp"),  # For debugging
             col("price.symbol").alias("symbol"),
             struct(
                 col("stats.window"),
                 when(
-                    (col("stats.std_price").isNotNull()) & (col("stats.std_price") != 0) & (col("price.price").isNotNull()),
+                    (col("stats.std_price").isNotNull()) &
+                    (col("stats.std_price") != 0) &
+                    (col("price.price").isNotNull()) &
+                    (col("stats.avg_price").isNotNull()),
                     (col("price.price") - col("stats.avg_price")) / col("stats.std_price")
                 ).otherwise(lit(None)).alias("zscore_price")
             ).alias("zscore_struct")
@@ -197,11 +210,32 @@ class ZScoreProcessor:
         result_df = zscore_df.groupBy("price_timestamp", "symbol") \
             .agg(collect_list("zscore_struct").alias("zscores"))
 
-        # Final select
+        # Define UDF to deduplicate zscores array by window
+        @udf(ArrayType(StructType([
+            StructField("window", StringType(), True),
+            StructField("zscore_price", DoubleType(), True)
+        ])))
+        def deduplicate_zscores(zscores: list) -> list:
+            if not zscores:
+                return []
+            # Create a dictionary to keep the first zscore_price for each window
+            seen_windows = {}
+            for zscore in zscores:
+                window = zscore["window"] if zscore and "window" in zscore else None
+                zscore_price = zscore["zscore_price"] if zscore and "zscore_price" in zscore else None
+                if window and window not in seen_windows:
+                    seen_windows[window] = {
+                        "window": window,
+                        "zscore_price": zscore_price
+                    }
+            # Return the deduplicated list
+            return list(seen_windows.values())
+
+        # Apply deduplication to zscores array
         result_df = result_df.select(
             col("price_timestamp").alias("timestamp"),
             col("symbol"),
-            col("zscores")
+            deduplicate_zscores(col("zscores")).alias("zscores")
         )
 
         return result_df
